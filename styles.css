@@ -1,0 +1,154 @@
+/**
+ * MindNote Styles
+ * Uses Obsidian CSS variables for theme compatibility
+ */
+
+/* Container */
+.mindnote-container {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--background-primary);
+}
+
+.mindnote-map {
+  width: 100%;
+  height: 100%;
+}
+
+/* Override mind-elixir styles for Obsidian integration */
+.mindnote-container .mind-elixir {
+  background: var(--background-primary);
+}
+
+.mindnote-container .mind-elixir-toolbar {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
+.mindnote-container .mind-elixir-toolbar button {
+  color: var(--text-normal);
+}
+
+.mindnote-container .mind-elixir-toolbar button:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Node styling */
+.mindnote-container .map-container {
+  background: var(--background-primary);
+}
+
+.mindnote-container .node {
+  font-family: var(--font-interface);
+}
+
+.mindnote-container .node .topic {
+  color: var(--text-normal);
+  border-radius: var(--main-radius, var(--radius-s));
+  padding: var(--topic-padding, 5px);
+}
+
+.mindnote-container .node.selected .topic {
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+}
+
+/* Image node thumbnail */
+.mindnote-node-image {
+  max-width: 120px;
+  height: auto;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+
+.mindnote-node-image:hover {
+  opacity: 0.9;
+}
+
+/* Context menu */
+/* Fix: The mind-elixir context menu backdrop must be transparent */
+/* so nodes remain visible behind it (it's a full-screen click area) */
+.mindnote-container .context-menu {
+  background: transparent !important;
+}
+
+.mindnote-container .context-menu .menu-list {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+}
+
+.mindnote-container .context-menu li {
+  color: var(--text-normal);
+}
+
+.mindnote-container .context-menu li:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Lines/connections */
+.mindnote-container .lines path {
+  stroke: var(--text-muted);
+  stroke-width: 1px;
+}
+
+/* Root node */
+.mindnote-container .root .topic {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-radius: var(--root-radius, var(--radius-s));
+}
+
+/* Focus states for accessibility */
+.mindnote-container button:focus-visible,
+.mindnote-container .node:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* Multi-preset styles */
+.mindnote-preset-minimal .node .topic {
+  border: none;
+  background: transparent;
+}
+
+.mindnote-preset-card .node .topic {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: var(--shadow-xs);
+}
+
+.mindnote-preset-colorful .node:nth-child(3n) .topic {
+  background: var(--color-accent);
+}
+
+.mindnote-preset-colorful .node:nth-child(3n+1) .topic {
+  background: var(--color-green);
+}
+
+.mindnote-preset-colorful .node:nth-child(3n+2) .topic {
+  background: var(--color-orange);
+}
+
+/*
+ * Gap Settings Overrides
+ * Use margin on wrapper and parent elements to control spacing.
+ * X-gap maps to left/right margins.
+ * Y-gap maps to top/bottom margins.
+ */
+
+.mindnote-container me-wrapper,
+.mindnote-container me-parent {
+  /* Vertical (Y) Gap */
+  margin-top: var(--node-gap-y, 15px) !important;
+  margin-bottom: var(--node-gap-y, 15px) !important;
+
+  /* Horizontal (X) Gap */
+  margin-left: var(--node-gap-x, 30px) !important;
+  margin-right: var(--node-gap-x, 30px) !important;
+
+  /* Ensure no padding interferes with gap calculations (per user spec padding is 0) */
+  padding: 0 !important;
+}

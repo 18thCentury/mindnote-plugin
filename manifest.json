@@ -1,0 +1,10 @@
+{
+  "id": "mindnote",
+  "name": "MindNote",
+  "version": "0.1.0",
+  "minAppVersion": "1.0.0",
+  "description": "Organize vault files using mindmap nodes with visual directory operations.",
+  "author": "MindNote Team",
+  "authorUrl": "https://github.com/mindnote",
+  "isDesktopOnly": false
+}
