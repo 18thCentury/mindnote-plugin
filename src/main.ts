@@ -1,17 +1,34 @@
 /**
  * MindNote Plugin - Main Entry Point
  */
-import { Plugin, WorkspaceLeaf, TFolder, TFile, Menu, Notice } from 'obsidian';
+import { Plugin, WorkspaceLeaf, TFolder, TFile, Menu, Notice, Editor, MarkdownView, MarkdownFileInfo } from 'obsidian';
 import { MindNoteSettings, DEFAULT_SETTINGS, VIEW_TYPE_MINDNOTE, FILE_EXTENSION_MN, MAP_FILE_NAME } from './types';
 import { MindNoteView } from './views/MindNoteView';
 import { CreateNoteModal } from './views/CreateNoteModal';
 import { MindNoteSettingTab } from './settings/SettingsTab';
+import { FileSystemManager } from './core';
 
 export default class MindNotePlugin extends Plugin {
     settings: MindNoteSettings = DEFAULT_SETTINGS;
+    private fsm!: FileSystemManager;
 
     async onload(): Promise<void> {
         await this.loadSettings();
+        this.fsm = new FileSystemManager(this.app);
+
+        // Handle file paste in MindNote markdown files
+        this.registerEvent(
+            this.app.workspace.on('editor-paste', (evt: ClipboardEvent, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
+                this.handlePaste(evt, editor, info);
+            })
+        );
+
+        // Handle file drop in MindNote markdown files
+        this.registerEvent(
+            this.app.workspace.on('editor-drop', (evt: DragEvent, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
+                this.handleDrop(evt, editor, info);
+            })
+        );
 
         // Register the mindnote view
         this.registerView(
@@ -170,5 +187,93 @@ export default class MindNotePlugin extends Plugin {
      */
     generateId(): string {
         return Math.random().toString(16).slice(2, 18);
+    }
+
+    /**
+     * Handle paste events
+     */
+    private async handlePaste(evt: ClipboardEvent, editor: Editor, info: MarkdownView | MarkdownFileInfo): Promise<void> {
+        if (!this.isMindNoteMarkdown(info.file)) return;
+        const files = evt.clipboardData?.files;
+        if (files && files.length > 0) {
+            await this.processFiles(files, evt, editor, info);
+        }
+    }
+
+    /**
+     * Handle drop events
+     */
+    private async handleDrop(evt: DragEvent, editor: Editor, info: MarkdownView | MarkdownFileInfo): Promise<void> {
+        if (!this.isMindNoteMarkdown(info.file)) return;
+        const files = evt.dataTransfer?.files;
+        if (files && files.length > 0) {
+            await this.processFiles(files, evt, editor, info);
+        }
+    }
+
+    /**
+     * Process files and save to bundle
+     */
+    private async processFiles(
+        files: FileList,
+        evt: Event,
+        editor: Editor,
+        info: MarkdownView | MarkdownFileInfo
+    ): Promise<void> {
+        const bundleFolder = info.file!.parent!.parent!; // validated in isMindNoteMarkdown
+        let handled = false;
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+
+            // We handle all files (images and others)
+            handled = true;
+            evt.preventDefault();
+
+            try {
+                const buffer = await file.arrayBuffer();
+                let relativePath: string;
+                let markdownLink: string;
+
+                if (file.type.startsWith('image/')) {
+                    // Save to img/ folder
+                    relativePath = await this.fsm.saveImage(bundleFolder.path, buffer, file.name);
+                    // Use standard markdown link for relative path support: ![](../img/file.png)
+                    markdownLink = `![](../${encodeURI(relativePath)})`;
+                } else {
+                    // Save to file/ folder
+                    relativePath = await this.fsm.saveResource(bundleFolder.path, buffer, file.name);
+                    // Use standard markdown link: [filename](../file/filename.ext)
+                    markdownLink = `[${file.name}](../${encodeURI(relativePath)})`;
+                }
+
+                editor.replaceSelection(markdownLink + '\n');
+
+                new Notice(`Saved file to ${relativePath}`);
+            } catch (error) {
+                new Notice(`Failed to save file: ${error}`);
+                console.error('File save error:', error);
+            }
+        }
+
+        if (handled) {
+            evt.stopPropagation();
+        }
+    }
+
+    /**
+     * Check if file is a markdown file inside a MindNote bundle
+     * Structure: bundle.mn/md/file.md
+     */
+    private isMindNoteMarkdown(file: TFile | null): boolean {
+        if (!file || file.extension !== 'md') return false;
+
+        const parent = file.parent;
+        if (!parent || parent.name !== 'md') return false;
+
+        const bundle = parent.parent;
+        if (!bundle || !bundle.name.endsWith(FILE_EXTENSION_MN)) return false;
+
+        return true;
     }
 }

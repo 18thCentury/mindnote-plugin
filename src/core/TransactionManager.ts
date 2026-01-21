@@ -113,6 +113,7 @@ export class TransactionManager {
      * Phase 2a: Commit - persist map.mn changes
      */
     async commit(newMapState: MindMapData): Promise<void> {
+        console.log('MindNote: Committing transaction', this.currentTx?.id);
         if (!this.currentTx) {
             throw new Error('No active transaction');
         }
@@ -137,6 +138,7 @@ export class TransactionManager {
      * Phase 2b: Rollback - restore all files to pre-transaction state
      */
     async rollback(): Promise<void> {
+        console.warn('MindNote: Rolling back transaction', this.currentTx?.id);
         if (!this.currentTx) {
             return;
         }

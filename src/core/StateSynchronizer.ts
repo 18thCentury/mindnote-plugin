@@ -141,8 +141,13 @@ export class StateSynchronizer {
      */
     async importImage(file: File): Promise<string> {
         const arrayBuffer = await file.arrayBuffer();
-        const relativePath = await this.fsm.saveImage(this.bundlePath, arrayBuffer, file.name);
-        return relativePath;
+        if (file.type.startsWith('image/')) {
+            const relativePath = await this.fsm.saveImage(this.bundlePath, arrayBuffer, file.name);
+            return relativePath;
+        } else {
+            const relativePath = await this.fsm.saveResource(this.bundlePath, arrayBuffer, file.name);
+            return relativePath;
+        }
     }
 
     private processNodeForDisplay(node: MindNode): void {
@@ -320,8 +325,10 @@ export class StateSynchronizer {
         }
 
         // Recursively delete children
-        for (const child of node.children) {
-            await this.executeNodeDelete(child);
+        if (node.children && Array.isArray(node.children)) {
+            for (const child of node.children) {
+                await this.executeNodeDelete(child);
+            }
         }
     }
 

@@ -167,6 +167,15 @@ export class MindNoteView extends ItemView {
         this.registerDomEvent(container, 'paste', (e: ClipboardEvent) => {
             this.handlePaste(e);
         });
+
+        // Handle Drop
+        this.registerDomEvent(container, 'dragover', (e: DragEvent) => {
+            e.preventDefault(); // Necessary to allow dropping
+        });
+
+        this.registerDomEvent(container, 'drop', (e: DragEvent) => {
+            this.handleDrop(e);
+        });
     }
 
     /**
@@ -265,44 +274,76 @@ export class MindNoteView extends ItemView {
     }
 
     /**
-     * Handle paste events (images)
+     * Handle paste events
      */
     private async handlePaste(e: ClipboardEvent): Promise<void> {
         const files = e.clipboardData?.files;
         if (files && files.length > 0) {
             e.preventDefault();
+            await this.processDroppedFiles(files);
+        }
+    }
 
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
+    /**
+     * Handle drop events
+     */
+    private async handleDrop(e: DragEvent): Promise<void> {
+        const files = e.dataTransfer?.files;
+        if (files && files.length > 0) {
+            e.preventDefault();
+            await this.processDroppedFiles(files);
+        }
+    }
+
+    /**
+     * Process dropped/pasted files
+     */
+    private async processDroppedFiles(files: FileList): Promise<void> {
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            try {
+                // Returns relative path (e.g. "img/foo.png" or "file/bar.pdf")
+                const relativePath = await this.synchronizer.importImage(file);
+
+                let newNode: MindNode;
+
                 if (file.type.startsWith('image/')) {
-                    try {
-                        const relativePath = await this.synchronizer.importImage(file);
+                    // Create image node
+                    const resourcePath = this.app.vault.adapter.getResourcePath(normalizePath(`${this.bundlePath}/${relativePath}`));
 
-                        // Create image node
-                        const resourcePath = this.app.vault.adapter.getResourcePath(normalizePath(`${this.bundlePath}/${relativePath}`));
-
-                        const newNode: MindNode = {
-                            id: crypto.randomUUID(),
-                            topic: `<img src="${resourcePath}" style="max-width:300px; border-radius: 4px;" />`,
-                            filepath: '',
-                            children: [],
-                            expanded: true,
-                            isImage: true,
-                            imageUrl: relativePath,
-                        };
-
-                        const selectedNode = this.mindElixir.currentNode; // Check if this property exists on instance
-
-                        if (selectedNode) {
-                            this.mindElixir.addChild(selectedNode, newNode);
-                        } else {
-                            const root = this.mindElixir.getData().nodeData;
-                            this.mindElixir.addChild(root, newNode);
-                        }
-                    } catch (error) {
-                        new Notice(`Failed to import image: ${error}`);
-                    }
+                    newNode = {
+                        id: crypto.randomUUID(),
+                        topic: `<img src="${resourcePath}" style="max-width:300px; border-radius: 4px;" />`,
+                        filepath: '', // synchronizer will generate md file
+                        children: [],
+                        expanded: true,
+                        isImage: true,
+                        imageUrl: relativePath,
+                    };
+                } else {
+                    // Create regular node for other files
+                    newNode = {
+                        id: crypto.randomUUID(),
+                        topic: file.name,
+                        filepath: '', // synchronizer will generate md file
+                        children: [],
+                        expanded: true
+                    };
+                    // Note: We might want to inject the file link into the generated markdown file
+                    // but standard 'create' op creates empty file. 
+                    // Future todo: allow pre-populating content.
                 }
+
+                const selectedNode = this.mindElixir.currentNode;
+
+                if (selectedNode) {
+                    this.mindElixir.addChild(selectedNode, newNode);
+                } else {
+                    const root = this.mindElixir.getData().nodeData;
+                    this.mindElixir.addChild(root, newNode);
+                }
+            } catch (error) {
+                new Notice(`Failed to import file: ${error}`);
             }
         }
     }

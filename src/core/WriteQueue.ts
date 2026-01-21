@@ -106,6 +106,7 @@ export class WriteQueue {
 
             await this.txManager.commit(this.getMapData());
         } catch (error) {
+            console.error('MindNote: WriteQueue processing failed:', error);
             await this.txManager.rollback();
             const message = error instanceof Error ? error.message : 'Unknown error';
             new Notice(`Failed to save changes: ${message}`);
