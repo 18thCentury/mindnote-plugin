@@ -396,9 +396,18 @@ export class StateSynchronizer {
             }
         }
 
-        if (!targetNode.filepath) return;
+        // If no filepath exists, create the markdown file now
+        if (!targetNode.filepath) {
+            await this.ensureNodeHasMarkdown(targetNode);
+        }
 
-        // If clicking the same node satisfyingly, do nothing
+        // Still no filepath? Something went wrong
+        if (!targetNode.filepath) {
+            console.warn('MindNote: Could not create markdown file for node:', targetNode.id);
+            return;
+        }
+
+        // If clicking the same node, do nothing
         if (this.currentOpenNode && this.currentOpenNode.id === targetNode.id) {
             return;
         }
@@ -408,13 +417,50 @@ export class StateSynchronizer {
 
         // Open new
         const filePath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
-        const file = this.app.vault.getAbstractFileByPath(filePath);
+        let file = this.app.vault.getAbstractFileByPath(filePath);
+
+        // If file doesn't exist on disk, create it
+        if (!(file instanceof TFile)) {
+            await this.fsm.ensureDirectory(this.getMdFolderPath());
+            await this.fsm.createFile(filePath, '');
+            file = this.app.vault.getAbstractFileByPath(filePath);
+        }
 
         if (file instanceof TFile) {
             const leaf = this.app.workspace.getLeaf('split', 'vertical');
             await leaf.openFile(file, { active: options.active });
             this.currentOpenNode = targetNode;
             this.currentLeaf = leaf;
+        }
+    }
+
+    /**
+     * Ensure a node has an associated markdown file, creating one if needed
+     */
+    private async ensureNodeHasMarkdown(node: MindNode): Promise<void> {
+        const mdFolder = this.getMdFolderPath();
+        await this.fsm.ensureDirectory(mdFolder);
+
+        const safeName = this.fsm.generateSafeName(node.topic, mdFolder);
+        const filePath = normalizePath(`${mdFolder}/${safeName}.md`);
+
+        // Create the file if it doesn't exist
+        const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(existingFile instanceof TFile)) {
+            await this.fsm.createFile(filePath, '');
+        }
+
+        // Update node's filepath
+        node.filepath = `${safeName}.md`;
+
+        // Update persistent map state
+        if (this.mapData) {
+            const storedNode = this.findNodeById(this.mapData.nodeData, node.id);
+            if (storedNode) {
+                storedNode.filepath = `${safeName}.md`;
+            }
+            // Save immediately
+            await this.saveMapState();
         }
     }
 

@@ -19,7 +19,10 @@
     "author": "MindNote Team",
     "license": "MIT",
     "devDependencies": {
+        "@types/dagre": "^0.7.52",
         "@types/node": "^20.10.0",
+        "@types/react": "^18.2.0",
+        "@types/react-dom": "^18.2.0",
         "@typescript-eslint/eslint-plugin": "^6.0.0",
         "@typescript-eslint/parser": "^6.0.0",
         "@vitest/coverage-v8": "^1.0.0",
@@ -31,6 +34,9 @@
         "vitest": "^1.0.0"
     },
     "dependencies": {
-        "mind-elixir": "^3.0.0"
+        "@xyflow/react": "^12.0.0",
+        "dagre": "^0.8.5",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0"
     }
 }

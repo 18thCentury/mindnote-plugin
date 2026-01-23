@@ -1,24 +1,29 @@
 /**
  * MindNote View
- * Main view for displaying and interacting with the mindmap
+ * Main view for displaying and interacting with the mindmap using React Flow
  */
-import { ItemView, WorkspaceLeaf, TFile, Notice, normalizePath, Menu } from 'obsidian';
-import MindElixir from 'mind-elixir';
+import { ItemView, WorkspaceLeaf, TFile, Notice, normalizePath } from 'obsidian';
+import { createRoot, type Root } from 'react-dom/client';
+import { createElement } from 'react';
 import type MindNotePlugin from '../main';
 import { VIEW_TYPE_MINDNOTE, MindMapData, MindNode, MAP_FILE_NAME, FILE_EXTENSION_MN } from '../types';
 import { FileSystemManager, TransactionManager, StateSynchronizer } from '../core';
+import { MindMapFlow, type MindMapFlowProps } from './components';
 
 export class MindNoteView extends ItemView {
     plugin: MindNotePlugin;
     bundlePath: string = '';
     bundleName: string = '';
-    private mindElixir: any = null;
+    private reactRoot: Root | null = null;
     private containerEl_: HTMLElement | null = null;
 
     // Core Modules
     private fsm: FileSystemManager;
     private txManager: TransactionManager;
     private synchronizer: StateSynchronizer;
+
+    // Content tracking
+    private contentMap: Map<string, boolean> = new Map();
 
     constructor(leaf: WorkspaceLeaf, plugin: MindNotePlugin) {
         super(leaf);
@@ -57,12 +62,15 @@ export class MindNoteView extends ItemView {
     }
 
     async onClose(): Promise<void> {
-        if (this.mindElixir) {
-            // Synchronizer handles persistence via queue flush
-            await this.synchronizer.flush();
+        // Unmount React tree
+        if (this.reactRoot) {
+            this.reactRoot.unmount();
+            this.reactRoot = null;
         }
+
+        // Flush pending synchronizer operations
+        await this.synchronizer.flush();
         this.synchronizer.dispose();
-        this.mindElixir = null;
     }
 
     /**
@@ -105,10 +113,13 @@ export class MindNoteView extends ItemView {
     private async initializeMindMap(container: HTMLElement): Promise<void> {
         try {
             await this.synchronizer.initialize(this.bundlePath);
-            // Use display data which has resolved image URLs
             const mapData = this.synchronizer.getDisplayMapData();
 
-            this.initMindElixir(container, mapData);
+            // Build content map for all nodes
+            await this.updateContentMap(mapData.nodeData);
+
+            // Create React root and render
+            this.renderReactFlow(container, mapData);
         } catch (error) {
             this.containerEl_?.createEl('div', {
                 text: `Failed to load MindNote: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -119,250 +130,155 @@ export class MindNoteView extends ItemView {
     }
 
     /**
-     * Initialize mind-elixir with map data
+     * Update content map by checking if each node's markdown has content
      */
-    private initMindElixir(container: HTMLElement, mapData: MindMapData): void {
-        const { settings } = this.plugin;
-
-        // Apply theme
-        let theme: 'primary' | 'dark' = 'primary';
-        if (settings.theme === 'dark') {
-            theme = 'dark';
-        } else if (settings.theme === 'auto') {
-            theme = document.body.classList.contains('theme-dark') ? 'dark' : 'primary';
-        }
-
-        // Apply spacing and appearance settings as CSS custom properties
-        // Uses mind-elixir's expected variable names for gaps
-        container.style.setProperty('--node-gap-x', `${settings.horizontalGap}px`);
-        container.style.setProperty('--node-gap-y', `${settings.verticalGap}px`);
-        container.style.setProperty('--main-gap-x', `${settings.mainHorizontalGap}px`);
-        container.style.setProperty('--main-gap-y', `${settings.mainVerticalGap}px`);
-        container.style.setProperty('--topic-padding', `${settings.topicPadding}px`);
-        container.style.setProperty('--main-radius', `${settings.nodeRadius}px`);
-        container.style.setProperty('--root-radius', `${settings.rootRadius}px`);
-
-        this.mindElixir = new MindElixir({
-            el: container,
-            direction: settings.direction,
-            draggable: true,
-            contextMenu: true,
-            toolBar: true,
-            nodeMenu: true,
-            keypress: true,
-            // theme: MindElixir.theme[theme],
-        });
-
-        this.mindElixir.init(mapData);
-
-        // Register event handlers
-        this.registerMindElixirEvents();
-
-        // Handle window resize
-        this.registerDomEvent(window, 'resize', () => {
-            this.mindElixir?.layout();
-        });
-
-        // Handle Paste
-        this.registerDomEvent(container, 'paste', (e: ClipboardEvent) => {
-            this.handlePaste(e);
-        });
-
-        // Handle Drop
-        this.registerDomEvent(container, 'dragover', (e: DragEvent) => {
-            e.preventDefault(); // Necessary to allow dropping
-        });
-
-        this.registerDomEvent(container, 'drop', (e: DragEvent) => {
-            this.handleDrop(e);
-        });
-    }
-
-    /**
-     * Register mind-elixir event handlers
-     */
-    private registerMindElixirEvents(): void {
-        if (!this.mindElixir) return;
-
-        this.mindElixir.bus.addListener('selectNode', async (node: MindNode) => {
-            await this.synchronizer.openNodeMarkdown(node, { active: false });
-        });
-
-
-
-        // Handle structural operations
-        this.mindElixir.bus.addListener('operation', (operation: any) => {
-            this.handleOperation(operation);
-        });
-    }
-
-    /**
-     * Handle operations from mind-elixir and sync to core
-     */
-    private async handleOperation(operation: { name: string; obj: any }): Promise<void> {
-        const { name, obj } = operation;
-        console.log(`MindNote: Operation '${name}'`, obj);
-
-        // Capture authoritative node data BEFORE updating state for deletion
-        // We need this because setMapData below will remove the node from checking the state
-        let nodeToDelete: MindNode | null = null;
-        if (name === 'removeNode' && obj && obj.id) {
-            try {
-                // Get current state before it's updated
-                const currentMapData = this.synchronizer.getMapData();
-                const authoritativeNode = this.findNodeById(currentMapData.nodeData, obj.id);
-                console.log('MindNote: Authoritative node found:', authoritativeNode);
-                // Create a copy to ensure it doesn't get mutated/lost
-                if (authoritativeNode) {
-                    // We can use the reference directly since setMapData replaces the entire state
-                    nodeToDelete = authoritativeNode;
-                    console.log('MindNote: Node to delete determined:', nodeToDelete);
-                } else {
-                    console.warn('MindNote: Could not find authoritative node for ID:', obj.id);
-                }
-            } catch (e) {
-                console.error('Failed to find node to delete:', e);
+    private async updateContentMap(node: MindNode): Promise<void> {
+        if (node.filepath) {
+            const filePath = normalizePath(`${this.bundlePath}/md/${node.filepath}`);
+            const file = this.app.vault.getAbstractFileByPath(filePath);
+            if (file instanceof TFile) {
+                const content = await this.app.vault.read(file);
+                this.contentMap.set(node.id, content.trim().length > 0);
+            } else {
+                this.contentMap.set(node.id, false);
             }
         }
+        if (node.children) {
+            for (const child of node.children) {
+                await this.updateContentMap(child);
+            }
+        }
+    }
 
-        // Sync map data first
-        if (this.mindElixir) {
-            const data = this.mindElixir.getData();
-            console.log('MindNote: Current Data from Elixir:', JSON.stringify(data));
-            this.synchronizer.setMapData(data);
+    /**
+     * Render React Flow component
+     */
+    private renderReactFlow(container: HTMLElement, mapData: MindMapData): void {
+        const { settings } = this.plugin;
+
+        // Create React root if not exists
+        if (!this.reactRoot) {
+            this.reactRoot = createRoot(container);
         }
 
-        // Map mind-elixir operations to synchronizer actions
-        switch (name) {
-            case 'addChild':
-                // obj is the new node
-                if (obj) this.synchronizer.onNodeCreated(obj);
-                break;
+        const props: MindMapFlowProps = {
+            mapData,
+            settings: {
+                direction: settings.direction,
+                horizontalGap: settings.horizontalGap,
+                verticalGap: settings.verticalGap,
+                theme: settings.theme,
+            },
+            contentMap: this.contentMap,
+            onNodeSelect: this.handleNodeSelect.bind(this),
+            onNodeCreate: this.handleNodeCreate.bind(this),
+            onNodeDelete: this.handleNodeDelete.bind(this),
+            onNodeRename: this.handleNodeRename.bind(this),
+            onMapDataChange: this.handleMapDataChange.bind(this),
+            onDrop: this.handleDrop.bind(this),
+            resolveImageUrl: this.resolveImageUrl.bind(this),
+        };
 
-            case 'removeNode':
-                // obj is the removed node (from UI), but we prefer the authoritative one with filepath
-                const node = nodeToDelete || obj;
-                if (node) this.synchronizer.onNodeDeleted(node);
-                break;
+        this.reactRoot.render(createElement(MindMapFlow, props));
+    }
 
-            case 'finishEdit':
-                // obj is the edited node
-                if (obj && obj.id) {
-                    // Find authoritative node (with filepath) from synchronizer state
-                    try {
-                        const mapData = this.synchronizer.getMapData();
-                        const authoritativeNode = this.findNodeById(mapData.nodeData, obj.id);
+    /**
+     * Resolve relative image path to Obsidian resource URL
+     */
+    private resolveImageUrl(relativePath: string): string {
+        const fullPath = normalizePath(`${this.bundlePath}/${relativePath}`);
+        return this.app.vault.adapter.getResourcePath(fullPath);
+    }
 
-                        if (authoritativeNode) {
-                            // Pass '' as oldTopic since it's unused by the rename logic (it relies on node.filepath)
-                            this.synchronizer.onNodeRenamed(authoritativeNode, '');
-                        }
-                    } catch (e) {
-                        console.error('Failed to sync rename:', e);
-                    }
-                }
-                break;
+    /**
+     * Handle node selection - open markdown file
+     */
+    private async handleNodeSelect(node: MindNode): Promise<void> {
+        await this.synchronizer.openNodeMarkdown(node, { active: false });
+    }
 
-            case 'moveNode':
-                // obj: { node, oldParent, newParent }
-                // this.synchronizer.onNodeMoved(...)
-                break;
-        }
+    /**
+     * Handle node creation
+     */
+    private handleNodeCreate(node: MindNode, _parentId: string): void {
+        this.synchronizer.onNodeCreated(node);
+    }
 
-        // Always save the map structure changes
+    /**
+     * Handle node deletion
+     */
+    private handleNodeDelete(node: MindNode): void {
+        this.synchronizer.onNodeDeleted(node);
+    }
+
+    /**
+     * Handle node rename
+     */
+    private handleNodeRename(node: MindNode, oldTopic: string): void {
+        this.synchronizer.onNodeRenamed(node, oldTopic);
+    }
+
+    /**
+     * Handle map data change - sync to storage
+     */
+    private async handleMapDataChange(data: MindMapData): Promise<void> {
+        this.synchronizer.setMapData(data);
         await this.synchronizer.saveMapState();
     }
 
     /**
-     * Handle paste events
+     * Handle file drop
      */
-    private async handlePaste(e: ClipboardEvent): Promise<void> {
-        const files = e.clipboardData?.files;
-        if (files && files.length > 0) {
-            e.preventDefault();
-            await this.processDroppedFiles(files);
-        }
-    }
-
-    /**
-     * Handle drop events
-     */
-    private async handleDrop(e: DragEvent): Promise<void> {
-        const files = e.dataTransfer?.files;
-        if (files && files.length > 0) {
-            e.preventDefault();
-            await this.processDroppedFiles(files);
-        }
-    }
-
-    /**
-     * Process dropped/pasted files
-     */
-    private async processDroppedFiles(files: FileList): Promise<void> {
+    private async handleDrop(files: FileList): Promise<void> {
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             try {
-                // Returns relative path (e.g. "img/foo.png" or "file/bar.pdf")
                 const relativePath = await this.synchronizer.importImage(file);
+
+                // Get current map data and find selected node
+                const mapData = this.synchronizer.getMapData();
+                const selectedNode = mapData.nodeData; // Default to root if no selection
 
                 let newNode: MindNode;
 
                 if (file.type.startsWith('image/')) {
-                    // Create image node
-                    const resourcePath = this.app.vault.adapter.getResourcePath(normalizePath(`${this.bundlePath}/${relativePath}`));
-
                     newNode = {
                         id: crypto.randomUUID(),
-                        topic: `<img src="${resourcePath}" style="max-width:300px; border-radius: 4px;" />`,
-                        filepath: '', // synchronizer will generate md file
+                        topic: file.name,
+                        filepath: '',
                         children: [],
                         expanded: true,
                         isImage: true,
                         imageUrl: relativePath,
                     };
                 } else {
-                    // Create regular node for other files
                     newNode = {
                         id: crypto.randomUUID(),
                         topic: file.name,
-                        filepath: '', // synchronizer will generate md file
+                        filepath: '',
                         children: [],
-                        expanded: true
+                        expanded: true,
                     };
-                    // Note: We might want to inject the file link into the generated markdown file
-                    // but standard 'create' op creates empty file. 
-                    // Future todo: allow pre-populating content.
                 }
 
-                const selectedNode = this.mindElixir.currentNode;
+                // Add as child of current selection (default to root)
+                this.synchronizer.onNodeCreated(newNode);
 
-                if (selectedNode) {
-                    this.mindElixir.addChild(selectedNode, newNode);
-                } else {
-                    const root = this.mindElixir.getData().nodeData;
-                    this.mindElixir.addChild(root, newNode);
+                // Re-render with updated data
+                const updatedData = this.synchronizer.getDisplayMapData();
+                await this.updateContentMap(updatedData.nodeData);
+
+                if (this.containerEl_) {
+                    const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
+                    if (mapContainer) {
+                        this.renderReactFlow(mapContainer, updatedData);
+                    }
                 }
+
+                new Notice(`Imported: ${file.name}`);
             } catch (error) {
                 new Notice(`Failed to import file: ${error}`);
             }
         }
-    }
-
-    /**
-     * Helper to find a node by ID in a tree
-     */
-    private findNodeById(node: MindNode, id: string): MindNode | null {
-        if (node.id === id) {
-            return node;
-        }
-
-        if (node.children && node.children.length > 0) {
-            for (const child of node.children) {
-                const found = this.findNodeById(child, id);
-                if (found) return found;
-            }
-        }
-
-        return null;
     }
 }
