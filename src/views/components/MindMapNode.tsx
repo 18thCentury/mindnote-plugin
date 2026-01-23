@@ -97,17 +97,18 @@ function MindMapNodeComponent({
                     <span className="mindmap-node-topic">{nodeData.topic}</span>
                 )}
 
-                {/* Collapse/expand toggle */}
-                {nodeData.hasChildren && (
-                    <button
-                        className="mindmap-toggle-btn"
-                        onClick={handleToggleClick}
-                        aria-label={nodeData.expanded ? 'Collapse' : 'Expand'}
-                    >
-                        {nodeData.expanded ? '−' : '+'}
-                    </button>
-                )}
             </div>
+
+            {/* Collapse/expand toggle */}
+            {nodeData.hasChildren && (
+                <button
+                    className="mindmap-toggle-btn"
+                    onClick={handleToggleClick}
+                    aria-label={nodeData.expanded ? 'Collapse' : 'Expand'}
+                >
+                    {nodeData.expanded ? '−' : '+'}
+                </button>
+            )}
 
             {/* Output handle (right side) */}
             <Handle
