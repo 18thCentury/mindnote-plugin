@@ -342,6 +342,7 @@ function MindMapFlowInner({
                 selectionMode={SelectionMode.Partial}
                 fitView
                 fitViewOptions={{ padding: 0.2 }}
+                zoomOnDoubleClick={false}
                 colorMode={isDark ? 'dark' : 'light'}
                 proOptions={{ hideAttribution: true }}
             >

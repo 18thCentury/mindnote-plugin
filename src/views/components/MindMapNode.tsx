@@ -25,7 +25,8 @@ function MindMapNodeComponent({
         }
     }, [isEditing]);
 
-    const handleDoubleClick = useCallback(() => {
+    const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
         if (!nodeData.isImage) {
             setEditValue(nodeData.topic);
             setIsEditing(true);
