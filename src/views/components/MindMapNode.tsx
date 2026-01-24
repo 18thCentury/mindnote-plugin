@@ -6,11 +6,8 @@ import { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { MindMapNodeData } from './layoutUtils';
 
-function MindMapNodeComponent({
-    id,
-    data,
-    selected,
-}: NodeProps) {
+function MindMapNodeComponent(props: NodeProps) {
+    const { id, data, selected, style } = props as any;
     // Cast data with proper type
     const nodeData = data as MindMapNodeData;
 
@@ -57,7 +54,7 @@ function MindMapNodeComponent({
     const nodeClass = `mindmap-node ${nodeData.isRoot ? 'mindmap-node-root' : ''} ${selected ? 'mindmap-node-selected' : ''}`;
 
     return (
-        <div className={nodeClass} onDoubleClick={handleDoubleClick}>
+        <div className={nodeClass} style={style} onDoubleClick={handleDoubleClick}>
             {/* Input handle (left side) */}
             {!nodeData.isRoot && (
                 <Handle

@@ -75,7 +75,13 @@ function measureNodeDimensions(
         };
     }
 
-    if (typeof document === 'undefined') return { width: 150, height: 40 };
+    if (typeof document === 'undefined') {
+        // Fallback for non-DOM environments (like Vitest in Node)
+        return {
+            width: Math.max(80, topic.length * 8 + (hasContent ? 20 : 0)),
+            height: 40
+        };
+    }
 
     const container = getMeasurementContainer();
     const tempNode = document.createElement('div');
@@ -111,9 +117,12 @@ function measureNodeDimensions(
 
     container.removeChild(tempNode);
 
-    const toggleBuffer = hasChildren ? 5 : 0;
+    // Padding and safety margins: 
+    // Sync with styles.css: padding: 8px 12px; + 6px gap
+    // Adding 10px extra for handles and toggle safely
+    const toggleBuffer = hasChildren ? 15 : 0;
     return {
-        width: Math.max(80, width + toggleBuffer + 2),
+        width: Math.max(40, width + toggleBuffer + 10),
         height: Math.max(options.nodeHeight, height + 4)
     };
 }
@@ -192,22 +201,16 @@ function applyDagreLayout(
     edges: Edge[],
     options: LayoutOptions
 ): Node<MindMapNodeData>[] {
-    const g = new dagre.graphlib.Graph();
-    g.setDefaultEdgeLabel(() => ({}));
-
-    // Determine direction: 0=Left (RL), 1=Right (LR), 2=Both (LR with alternating)
-    const rankdir = options.direction === 0 ? 'RL' : 'LR';
-
-    g.setGraph({
-        rankdir,
-        nodesep: options.verticalGap,
-        ranksep: options.horizontalGap,
-        marginx: 20,
-        marginy: 20,
+    // 1. Build parent -> children map from edges
+    const parentToChildren = new Map<string, string[]>();
+    edges.forEach(edge => {
+        if (!parentToChildren.has(edge.source)) parentToChildren.set(edge.source, []);
+        parentToChildren.get(edge.source)?.push(edge.target);
     });
 
-    // Add nodes to the graph
-    for (const node of nodes) {
+    // 2. Measure all nodes and store dimensions
+    const nodeDims = new Map<string, { width: number, height: number }>();
+    nodes.forEach(node => {
         const dims = measureNodeDimensions(
             node.data.topic,
             !!node.data.isImage,
@@ -216,101 +219,90 @@ function applyDagreLayout(
             !!node.data.hasChildren,
             options
         );
-        g.setNode(node.id, {
-            width: dims.width,
-            height: dims.height,
+        nodeDims.set(node.id, dims);
+    });
+
+    // 3. First pass: Calculate height of each subtree recursively
+    const subtreeHeights = new Map<string, number>();
+    function calculateHeight(nodeId: string): number {
+        const children = parentToChildren.get(nodeId) || [];
+        const selfHeight = nodeDims.get(nodeId)!.height;
+
+        if (children.length === 0) {
+            subtreeHeights.set(nodeId, selfHeight);
+            return selfHeight;
+        }
+
+        let totalChildrenHeight = 0;
+        children.forEach((childId, index) => {
+            totalChildrenHeight += calculateHeight(childId);
+            if (index < children.length - 1) {
+                totalChildrenHeight += options.verticalGap;
+            }
         });
+
+        // The subtree height is the total height of children, but we must ensure the parent has enough room if it's taller
+        const h = Math.max(selfHeight, totalChildrenHeight);
+        subtreeHeights.set(nodeId, h);
+        return h;
     }
 
-    // Add edges to the graph
-    for (const edge of edges) {
-        g.setEdge(edge.source, edge.target);
-    }
+    const rootNodes = nodes.filter(n => n.data.isRoot);
+    rootNodes.forEach(root => calculateHeight(root.id));
 
-    // Calculate layout
-    dagre.layout(g);
+    // 4. Second pass: Assign coordinates recursively
+    const finalPositions = new Map<string, { x: number, y: number }>();
+    function assignCoords(nodeId: string, x: number, yCenter: number) {
+        const dims = nodeDims.get(nodeId)!;
+        const totalSubtreeHeight = subtreeHeights.get(nodeId)!;
 
-    // Post-processing: Align siblings and clear parents via "Shift" strategy.
-    // This preserves Dagre's non-overlap guarantees because we NEVER move nodes to the left.
-    const positionMap = new Map<string, { x: number, y: number, width: number }>();
-    if (options.direction === 1) { // Right
-        const edgeMap = new Map<string, string[]>(); // parentId -> childIds
-        edges.forEach(edge => {
-            if (!edgeMap.has(edge.source)) edgeMap.set(edge.source, []);
-            edgeMap.get(edge.source)?.push(edge.target);
+        // Position current node centered vertically within its subtree space
+        finalPositions.set(nodeId, {
+            x,
+            y: yCenter - dims.height / 2
         });
 
-        const visited = new Set<string>();
-        const rootNodes = nodes.filter(n => n.data.isRoot);
+        const children = parentToChildren.get(nodeId) || [];
+        if (children.length > 0) {
+            const childrenX = x + dims.width + options.horizontalGap;
 
-        // Map to store current calculated LEFT X for each node
-        const currentXMap = new Map<string, number>();
-
-        // 1. Initialize with Dagre's default "left" positions
-        nodes.forEach(node => {
-            const meta = g.node(node.id);
-            currentXMap.set(node.id, meta.x - meta.width / 2);
-        });
-
-        const shiftSubtree = (nodeId: string, shift: number) => {
-            currentXMap.set(nodeId, (currentXMap.get(nodeId) || 0) + shift);
-            const children = edgeMap.get(nodeId) || [];
-            children.forEach(childId => shiftSubtree(childId, shift));
-        };
-
-        const alignSubtrees = (parentId: string) => {
-            const children = edgeMap.get(parentId) || [];
-            if (children.length === 0) return;
-
-            const parentMeta = g.node(parentId);
-            const parentX = currentXMap.get(parentId)!;
-
-            // Target alignment X for children. 
-            // Must clear the parent AND be at least as far right as the right-most Dagre suggested start.
-            let targetX = parentX + parentMeta.width + options.horizontalGap;
-
-            for (const childId of children) {
-                targetX = Math.max(targetX, currentXMap.get(childId)!);
-            }
-
-            // Apply shifts
-            for (const childId of children) {
-                const currentChildX = currentXMap.get(childId)!;
-                if (targetX > currentChildX) {
-                    shiftSubtree(childId, targetX - currentChildX);
-                }
-                alignSubtrees(childId);
-            }
-        };
-
-        rootNodes.forEach(root => alignSubtrees(root.id));
-
-        // Transfer final positions to positionMap
-        nodes.forEach(node => {
-            const meta = g.node(node.id);
-            positionMap.set(node.id, {
-                x: currentXMap.get(node.id)!,
-                y: meta.y - meta.height / 2,
-                width: meta.width
+            // Total height of children block
+            let totalChildrenHeight = 0;
+            children.forEach((childId, index) => {
+                totalChildrenHeight += subtreeHeights.get(childId)!;
+                if (index < children.length - 1) totalChildrenHeight += options.verticalGap;
             });
-        });
+
+            // Start positioning children at the top of their block
+            let currentY = yCenter - totalChildrenHeight / 2;
+
+            children.forEach(childId => {
+                const childSubtreeHeight = subtreeHeights.get(childId)!;
+                const childYCenter = currentY + childSubtreeHeight / 2;
+                assignCoords(childId, childrenX, childYCenter);
+                currentY += childSubtreeHeight + options.verticalGap;
+            });
+        }
     }
 
-    // Apply calculated positions back to nodes
+    // Start coordinate assignment
+    let currentRootY = 0;
+    rootNodes.forEach((root, index) => {
+        const rootHeight = subtreeHeights.get(root.id)!;
+        assignCoords(root.id, 20, currentRootY + rootHeight / 2);
+        currentRootY += rootHeight + options.verticalGap * 2; // Extra gap between multiple roots
+    });
+
+    // Transfer final positions to nodes
     return nodes.map((node) => {
-        const meta = g.node(node.id);
-        const customPos = positionMap.get(node.id);
+        const pos = finalPositions.get(node.id)!;
+        const dims = nodeDims.get(node.id)!;
 
         return {
             ...node,
-            position: {
-                // Use custom X if available (Right direction), otherwise Dagre default
-                x: customPos ? customPos.x : (meta.x - meta.width / 2),
-                // Use Dagre default Y for ALL nodes
-                y: meta.y - meta.height / 2,
-            },
+            position: pos,
             style: {
-                width: meta.width,
+                width: dims.width,
             }
         };
     });
