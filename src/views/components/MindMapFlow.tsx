@@ -125,7 +125,21 @@ function MindMapFlowInner({
         });
     }, [onMapDataChange, onNodeRename]);
 
-    // Convert tree to flow elements whenever tree changes
+    const [fontsLoaded, setFontsLoaded] = useState(false);
+
+    // Trigger re-layout when fonts are ready ensuring accurate measurement
+    useEffect(() => {
+        if (document.fonts) {
+            document.fonts.ready.then(() => {
+                setFontsLoaded(true);
+            });
+        } else {
+            // Fallback
+            setTimeout(() => setFontsLoaded(true), 200);
+        }
+    }, []);
+
+    // Convert tree to flow elements whenever tree changes or fonts load
     useEffect(() => {
         // Process image URLs for display
         const processNode = (node: MindNode): MindNode => {
@@ -143,6 +157,8 @@ function MindMapFlowInner({
         };
 
         const displayTree = processNode(treeData);
+        // We depend on fontsLoaded state to trigger a re-render after fonts are ready
+        // The measureNodeWidth function uses DOM measurement which requires fonts to be loaded
         const { nodes: newNodes, edges: newEdges } = convertToFlowElements(
             displayTree,
             layoutOptions,
@@ -154,7 +170,7 @@ function MindMapFlowInner({
         );
         setNodes(newNodes);
         setEdges(newEdges);
-    }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename]);
+    }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename, fontsLoaded]);
 
     // Handle node selection
     const handleNodeClick: NodeMouseHandler = useCallback((_, node) => {

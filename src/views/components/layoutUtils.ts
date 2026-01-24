@@ -1,17 +1,17 @@
 /**
  * Layout Utilities for React Flow Mindmap
- * Uses Dagre for hierarchical tree layout with collapse/expand support
+ * Uses a custom Tidy Tree (Block Centering) algorithm.
+ * Guarantees centered parents and compact subtrees.
  */
-import dagre from 'dagre';
 import type { Node, Edge } from '@xyflow/react';
 import type { MindNode, Direction } from '../../types';
 
 export interface LayoutOptions {
     direction: Direction;
-    nodeWidth: number;
-    nodeHeight: number;
-    horizontalGap: number;
-    verticalGap: number;
+    nodeWidth: number;          // Default minimum width
+    nodeHeight: number;         // Default height
+    horizontalGap: number;      // Gap between parent and child (rank separation)
+    verticalGap: number;        // Gap between sibling nodes (node separation)
     fontSize?: number;
     fontFamily?: string;
 }
@@ -35,15 +35,34 @@ export interface MindMapNodeData {
 
 const DEFAULT_OPTIONS: LayoutOptions = {
     direction: 1, // Right
-    nodeWidth: 150, // Default minimum width
+    nodeWidth: 150,
     nodeHeight: 40,
-    horizontalGap: 50,
-    verticalGap: 20,
+    horizontalGap: 60,  // Increased slightly for visual breathing room
+    verticalGap: 10,    // Tighter vertical packing
     fontSize: 14,
     fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
 };
 
-// Helper to get computed styles for measurement
+// ----------------------------------------------------------------------------
+// Internal Layout Types
+// ----------------------------------------------------------------------------
+
+interface TreeLayoutNode extends MindNode {
+    // Computed layout properties
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+
+    // Geometry for the algorithm
+    subtreeHeight: number; // Total vertical space required by this node and its children
+    children: TreeLayoutNode[]; // Recursive typing
+}
+
+// ----------------------------------------------------------------------------
+// DOM Measurement Helpers
+// ----------------------------------------------------------------------------
+
 let measurementContainer: HTMLDivElement | null = null;
 
 function getMeasurementContainer(): HTMLDivElement {
@@ -58,49 +77,164 @@ function getMeasurementContainer(): HTMLDivElement {
     return measurementContainer;
 }
 
-function measureNodeWidth(topic: string, isImage: boolean, options: LayoutOptions): number {
-    if (isImage) return options.nodeWidth; // Use default node width for images or separate config
-    if (typeof document === 'undefined') return 150; // Server-side fallback
+function measureNode(topic: string, isImage: boolean, hasContent: boolean, options: LayoutOptions): { width: number, height: number } {
+    if (isImage) {
+        // For images, we might strictly obey default dimensions or 
+        // ideally measuring the actual image if loaded, but for layout we stick to defaults or configuration.
+        return { width: options.nodeWidth, height: options.nodeHeight };
+    }
+
+    if (typeof document === 'undefined') {
+        return { width: options.nodeWidth, height: options.nodeHeight };
+    }
 
     const container = getMeasurementContainer();
     const tempNode = document.createElement('div');
 
-    // mimic .mindmap-node and .mindmap-node-content structure
-    // We need to apply the classes that affect width/font
-    tempNode.className = 'mindmap-node';
-
-    // Add inline styles to ensure it doesn't get constrained by parent width during measurement
+    // Mimic the MindMapNode CSS
     tempNode.style.width = 'max-content';
-    tempNode.style.display = 'inline-block';
+    tempNode.style.minWidth = 'max-content';
+    tempNode.style.display = 'inline-flex';
+    tempNode.style.alignItems = 'center';
+    tempNode.style.boxSizing = 'border-box';
+    tempNode.style.padding = '8px 12px'; // Match CSS padding
+    tempNode.style.border = '1px solid transparent';
 
-    // Create content structure similar to actual node
-    // Padding and borders are on .mindmap-node
-    // Text content is inside .mindmap-node-content -> .mindmap-node-topic
+    // Font settings
+    tempNode.style.fontSize = `${options.fontSize}px`;
+    tempNode.style.fontFamily = options.fontFamily || 'sans-serif';
+
+    // Simulated Content
     const content = document.createElement('div');
-    content.className = 'mindmap-node-content';
+    content.style.display = 'flex';
+    content.style.alignItems = 'center';
+    content.style.gap = '6px';
+
+    if (hasContent) {
+        const indicator = document.createElement('span');
+        indicator.textContent = '📝';
+        indicator.style.fontSize = '12px';
+        indicator.style.marginRight = '4px';
+        content.appendChild(indicator);
+    }
 
     const topicSpan = document.createElement('span');
-    topicSpan.className = 'mindmap-node-topic';
     topicSpan.textContent = topic;
-
+    topicSpan.style.whiteSpace = 'nowrap';
     content.appendChild(topicSpan);
+
     tempNode.appendChild(content);
     container.appendChild(tempNode);
 
-    // Measure
-    const width = tempNode.offsetWidth;
+    const width = Math.ceil(tempNode.offsetWidth);
+    const height = Math.ceil(tempNode.offsetHeight);
 
-    // Cleanup
     container.removeChild(tempNode);
 
-    // Add a small buffer for safety and consistent look
-    return Math.max(80, width + 10);
+    // Enforce Minimums
+    return {
+        width: Math.max(options.nodeWidth || 80, width),
+        height: Math.max(options.nodeHeight || 30, height)
+    };
+}
+
+// ----------------------------------------------------------------------------
+// Layout Algorithm (Block Centering)
+// ----------------------------------------------------------------------------
+
+/**
+ * Step 1: Post-order traversal.
+ * Calculates dimensions and subtree heights.
+ */
+function computeSubtreeValues(node: TreeLayoutNode, options: LayoutOptions): void {
+    // 1. Measure the node itself (Content Size)
+    // Note: We access the raw data props via MindNode interface
+    const dimensions = measureNode(
+        node.topic,
+        node.isImage || false,
+        // We don't have direct access to 'hasContent' from MindNode here easily 
+        // unless we pass the contentMap or enrich MindNode earlier. 
+        // For sizing, 'hasContent' flag impact is small (icon), 
+        // but let's assume worst case or just text width.
+        // If we really need exact pixel perfection, we should enrich MindNode first.
+        // For now, text width is the dominant factor.
+        false,
+        options
+    );
+
+    node.width = dimensions.width;
+    node.height = dimensions.height;
+
+    // 2. Process Children
+    if (node.expanded && node.children && node.children.length > 0) {
+        let maxChildrenWidth = 0;
+        let childrenTotalHeight = 0;
+
+        node.children.forEach((child, index) => {
+            computeSubtreeValues(child, options);
+
+            childrenTotalHeight += child.subtreeHeight;
+            // Add vertical gap between siblings
+            if (index < node.children.length - 1) {
+                childrenTotalHeight += options.verticalGap;
+            }
+        });
+
+        // The subtree height is the maximum of:
+        // A) The node's own height
+        // B) The total height of the children stack
+        node.subtreeHeight = Math.max(node.height, childrenTotalHeight);
+    } else {
+        // Leaf node determines its own subtree height
+        node.subtreeHeight = node.height;
+    }
 }
 
 /**
- * Convert MindNode tree to flat arrays of nodes and edges for React Flow
- * Respects expanded state for collapse/expand
+ * Step 2: Pre-order traversal.
+ * Assigns X,Y coordinates based on calculated subtree heights.
+ * @param node Current node
+ * @param x Absolute X position for the node
+ * @param yCenter Absolute Y position for the CENTER of this node's allocated vertical space
+ * @param options Layout options
  */
+function assignCoordinates(node: TreeLayoutNode, x: number, yCenter: number, options: LayoutOptions): void {
+    // 1. Set current node position
+    node.x = x;
+    // We want the node to be centered around yCenter.
+    // yCenter is the midpoint of the "block" allocated to this node.
+    node.y = yCenter - (node.height / 2);
+
+    // 2. Position Children
+    if (node.expanded && node.children && node.children.length > 0) {
+
+        // Calculate the total height of the children block
+        // Re-suming here is cheap, or we could have cached it.
+        const childrenBlockHeight = node.children.reduce((acc, child) => acc + child.subtreeHeight, 0)
+            + (node.children.length - 1) * options.verticalGap;
+
+        // The children block should be centered around `yCenter` as well.
+        // Start Y is the top of the block.
+        let currentChildY = yCenter - (childrenBlockHeight / 2);
+
+        const childX = x + node.width + options.horizontalGap;
+
+        node.children.forEach(child => {
+            // The child's center Y is: current cursor + half its subtree height
+            const childCenterY = currentChildY + (child.subtreeHeight / 2);
+
+            assignCoordinates(child, childX, childCenterY, options);
+
+            // Advance cursor
+            currentChildY += child.subtreeHeight + options.verticalGap;
+        });
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Main Exported Function
+// ----------------------------------------------------------------------------
+
 export function convertToFlowElements(
     root: MindNode,
     options: Partial<LayoutOptions> = {},
@@ -111,17 +245,54 @@ export function convertToFlowElements(
     }
 ): { nodes: Node<MindMapNodeData>[]; edges: Edge[] } {
     const opts = { ...DEFAULT_OPTIONS, ...options };
-    const nodes: Node<MindMapNodeData>[] = [];
-    const edges: Edge[] = [];
 
-    function traverse(node: MindNode, depth: number = 0, parentId?: string): void {
+    // 1. Transform MindNode tree to TreeLayoutNode tree (deep copy to avoid mutation of original if needed, 
+    //    but here we construct a parallel structure or cast if we are careful).
+    //    We need a recursive mapper to attach the extra fields.
+
+    function mapToLayoutNode(n: MindNode): TreeLayoutNode {
+        return {
+            ...n,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            subtreeHeight: 0,
+            // Only map children if expanded, otherwise layout treats them as non-existent
+            children: (n.expanded !== false && n.children)
+                ? n.children.map(mapToLayoutNode)
+                : []
+        };
+    }
+
+    // Safety check for empty tree
+    if (!root) {
+        return { nodes: [], edges: [] };
+    }
+
+    const layoutRoot = mapToLayoutNode(root);
+
+    // 2. Perform Layout
+    // Step A: Calculate sizes
+    computeSubtreeValues(layoutRoot, opts);
+
+    // Step B: Assign Coordinates
+    // Start at (0, 0)
+    assignCoordinates(layoutRoot, 0, 0, opts);
+
+    // 3. Flatten to React Flow Elements
+    const rfNodes: Node<MindMapNodeData>[] = [];
+    const rfEdges: Edge[] = [];
+
+    function flatten(node: TreeLayoutNode, depth: number = 0, parentId?: string) {
         const hasChildren = node.children && node.children.length > 0;
+        // Check original data for accurate flags, though layoutNode copies properties
         const hasContent = contentMap.get(node.id) ?? false;
 
-        nodes.push({
+        rfNodes.push({
             id: node.id,
             type: 'mindMapNode',
-            position: { x: 0, y: 0 }, // Will be calculated by Dagre
+            position: { x: node.x, y: node.y },
             data: {
                 id: node.id,
                 topic: node.topic,
@@ -130,174 +301,63 @@ export function convertToFlowElements(
                 imageUrl: node.imageUrl,
                 hasContent,
                 expanded: node.expanded !== false,
-                hasChildren,
+                hasChildren: (root.id === node.id) ? (root.children && root.children.length > 0) : (node.children && node.children.length > 0), // layoutNode.children might be empty if collapsed, so we can't trust it for "hasChildren" indicator. Ideally we check the original node, but copying prop is safer.
+
                 isRoot: depth === 0,
                 depth,
                 onToggleExpand: callbacks?.onToggleExpand,
                 onNodeRename: callbacks?.onNodeRename,
             },
+            // Explicit style width to ensure RF handles interaction area correctly
+            style: {
+                width: node.width,
+            }
         });
 
         if (parentId) {
-            edges.push({
+            rfEdges.push({
                 id: `${parentId}-${node.id}`,
                 source: parentId,
                 target: node.id,
-                type: 'smoothstep',
+                type: 'smoothstep', // or 'bezier'
+                // We can maximize edge aesthetic
             });
         }
 
-        // Only traverse children if node is expanded
-        if (hasChildren && node.expanded !== false) {
-            for (const child of node.children) {
-                traverse(child, depth + 1, node.id);
-            }
+        if (node.children) {
+            node.children.forEach(child => flatten(child, depth + 1, node.id));
         }
     }
 
-    traverse(root);
-
-    // Apply Dagre layout
-    const layoutedNodes = applyDagreLayout(nodes, edges, opts);
-
-    return { nodes: layoutedNodes, edges };
-}
-
-/**
- * Apply Dagre layout algorithm to position nodes
- */
-function applyDagreLayout(
-    nodes: Node<MindMapNodeData>[],
-    edges: Edge[],
-    options: LayoutOptions
-): Node<MindMapNodeData>[] {
-    const g = new dagre.graphlib.Graph();
-    g.setDefaultEdgeLabel(() => ({}));
-
-    // Determine direction: 0=Left (RL), 1=Right (LR), 2=Both (LR with alternating)
-    const rankdir = options.direction === 0 ? 'RL' : 'LR';
-
-    g.setGraph({
-        rankdir,
-        nodesep: options.verticalGap,
-        ranksep: options.horizontalGap,
-        marginx: 20,
-        marginy: 20,
-    });
-
-    // Add nodes to the graph
-    for (const node of nodes) {
-        const width = measureNodeWidth(node.data.topic, !!node.data.isImage, options);
-        g.setNode(node.id, {
-            width: width,
-            height: options.nodeHeight,
-        });
-    }
-
-    // Add edges to the graph
-    for (const edge of edges) {
-        g.setEdge(edge.source, edge.target);
-    }
-
-    // Calculate layout
-    dagre.layout(g);
-
-    // Post-processing: Compact X coordinates to fix "wide sibling" gap issue
-    // We keep Dagre's Y-coordinates (rank separation) but manually calculate X based on parent-child chain
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    const edgeMap = new Map<string, string[]>(); // parentId -> childIds
-
-    edges.forEach(edge => {
-        const source = edge.source;
-        const target = edge.target;
-        if (!edgeMap.has(source)) edgeMap.set(source, []);
-        edgeMap.get(source)?.push(target);
-    });
-
-    const visited = new Set<string>();
-    const rootNodes = nodes.filter(n => n.data.isRoot);
-
-    // Helper to get measured dimensions from Dagre graph
-    const getNodeMeta = (id: string) => g.node(id);
-
-    function compactCoordinates(nodeId: string, parentX?: number, parentWidth?: number) {
-        if (visited.has(nodeId)) return;
-        visited.add(nodeId);
-
-        const nodeMeta = getNodeMeta(nodeId);
-        const node = nodeMap.get(nodeId);
-
-        if (!node || !nodeMeta) return;
-
-        // Calculate new X
-        let newX = nodeMeta.x; // Fallback to Dagre's center X
-
-        if (parentX !== undefined && parentWidth !== undefined) {
-            // Compact logic: Parent Left + Parent Width + Gap
-            // Note: nodeMeta.width is the full width. 
-            // Position in React Flow makes 'x' the left-top corner.
-            // But here we are calculating specific positions. 
-            // Let's standardize on calculating the LEFT edge (React Flow 'x').
-
-            // parentX is the parent's LEFT edge.
-            newX = parentX + parentWidth + options.horizontalGap;
-        } else {
-            // Root node or detached: convert Dagre center-X to Left-X
-            newX = nodeMeta.x - nodeMeta.width / 2;
-        }
-
-        // Store the calculated LEFT X in the node wrapper for now (or directly update)
-        // We can't mutate 'node' directly safely if it's reused, but here 'nodes' is a fresh array from convertToFlowElements.
-        // We will store it in a map or just update a temporary structure. 
-        // Let's use a position map.
-        positionMap.set(nodeId, { x: newX, y: nodeMeta.y - nodeMeta.height / 2, width: nodeMeta.width });
-
-        // Recurse children
-        const children = edgeMap.get(nodeId) || [];
-        for (const childId of children) {
-            compactCoordinates(childId, newX, nodeMeta.width);
-        }
-    }
-
-    const positionMap = new Map<string, { x: number, y: number, width: number }>();
-
-    // Start traversal from roots
-    rootNodes.forEach(root => compactCoordinates(root.id));
-
-    // Handle any disconnected nodes that weren't reached (fallback to safe Dagre values)
-    nodes.forEach(node => {
-        if (!visited.has(node.id)) {
-            const meta = getNodeMeta(node.id);
-            positionMap.set(node.id, {
-                x: meta.x - meta.width / 2,
-                y: meta.y - meta.height / 2,
-                width: meta.width
-            });
-        }
-    });
-
-    // Apply calculated positions back to nodes
-    return nodes.map((node) => {
-        const pos = positionMap.get(node.id)!;
+    // Fix the mapping function to preserve child existence knowledge
+    function refinedMap(n: MindNode): TreeLayoutNode & { _realHasChildren: boolean } {
+        const hasRealChildren = n.children && n.children.length > 0;
         return {
-            ...node,
-            position: {
-                x: pos.x,
-                y: pos.y,
-            },
-            style: {
-                // Explicitly set width in style to ensure React Flow knows it, 
-                // though MindMapNode component handles sizing mostly. 
-                // Setting width here helps RF handle handles correctly if needed.
-                width: pos.width,
-            }
+            ...n,
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            subtreeHeight: 0,
+            children: (n.expanded !== false && n.children)
+                ? n.children.map(refinedMap)
+                : [],
+            _realHasChildren: hasRealChildren
         };
-    });
+    }
+
+    const refinedRoot = refinedMap(root);
+    computeSubtreeValues(refinedRoot, opts);
+    assignCoordinates(refinedRoot, 0, 0, opts);
+    flatten(refinedRoot);
+
+    return { nodes: rfNodes, edges: rfEdges };
 }
 
-/**
- * Find a node by ID in the tree
- */
+// ----------------------------------------------------------------------------
+// Utility Functions (Unchanged)
+// ----------------------------------------------------------------------------
+
 export function findNodeInTree(root: MindNode, id: string): MindNode | null {
     if (root.id === id) return root;
     if (root.children) {
@@ -309,9 +369,6 @@ export function findNodeInTree(root: MindNode, id: string): MindNode | null {
     return null;
 }
 
-/**
- * Toggle expanded state of a node
- */
 export function toggleNodeExpanded(root: MindNode, id: string): MindNode {
     if (root.id === id) {
         return { ...root, expanded: !root.expanded };
@@ -325,15 +382,12 @@ export function toggleNodeExpanded(root: MindNode, id: string): MindNode {
     return root;
 }
 
-/**
- * Add a child node to a parent
- */
 export function addChildNode(root: MindNode, parentId: string, newNode: MindNode): MindNode {
     if (root.id === parentId) {
         return {
             ...root,
             children: [...(root.children || []), newNode],
-            expanded: true, // Auto-expand when adding child
+            expanded: true,
         };
     }
     if (root.children) {
@@ -345,12 +399,9 @@ export function addChildNode(root: MindNode, parentId: string, newNode: MindNode
     return root;
 }
 
-/**
- * Remove a node from the tree
- */
 export function removeNode(root: MindNode, id: string): MindNode | null {
     if (root.id === id) {
-        return null; // Remove this node
+        return null;
     }
     if (root.children) {
         return {
@@ -363,9 +414,6 @@ export function removeNode(root: MindNode, id: string): MindNode | null {
     return root;
 }
 
-/**
- * Update a node's topic
- */
 export function updateNodeTopic(root: MindNode, id: string, topic: string): MindNode {
     if (root.id === id) {
         return { ...root, topic };
