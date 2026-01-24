@@ -38,7 +38,7 @@ const DEFAULT_OPTIONS: LayoutOptions = {
     nodeWidth: 150, // Default minimum width
     nodeHeight: 40,
     horizontalGap: 50,
-    verticalGap: 20,
+    verticalGap: 40, // Increased for safer margins
     fontSize: 14,
     fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
 };
@@ -58,31 +58,33 @@ function getMeasurementContainer(): HTMLDivElement {
     return measurementContainer;
 }
 
-function measureNodeWidth(
+function measureNodeDimensions(
     topic: string,
     isImage: boolean,
     isRoot: boolean,
     hasContent: boolean,
     hasChildren: boolean,
     options: LayoutOptions
-): number {
-    if (isImage) return options.nodeWidth;
-    if (typeof document === 'undefined') return 150; // Server-side fallback
+): { width: number, height: number } {
+    if (isImage) {
+        // Approximate image dimensions + padding. 
+        // Sync these with MindMapNode.tsx/styles.css (.mindmap-node-image)
+        return {
+            width: Math.max(120, options.nodeWidth),
+            height: 100 // 80px image max + 20px padding/margins
+        };
+    }
+
+    if (typeof document === 'undefined') return { width: 150, height: 40 };
 
     const container = getMeasurementContainer();
     const tempNode = document.createElement('div');
-
-    // mimic .mindmap-node and .mindmap-node-content structure
-    // We need to apply the classes that affect width/font
     tempNode.className = `mindmap-node ${isRoot ? 'mindmap-node-root' : ''}`;
-
-    // Add inline styles to ensure it doesn't get constrained by parent width during measurement
     tempNode.style.width = 'max-content';
     tempNode.style.display = 'inline-block';
     tempNode.style.visibility = 'hidden';
     tempNode.style.position = 'absolute';
 
-    // Create content structure similar to actual node
     const content = document.createElement('div');
     content.className = 'mindmap-node-content';
     content.style.display = 'flex';
@@ -104,17 +106,16 @@ function measureNodeWidth(
     tempNode.appendChild(content);
     container.appendChild(tempNode);
 
-    // Measure
     const width = tempNode.offsetWidth;
+    const height = tempNode.offsetHeight;
 
-    // Cleanup
     container.removeChild(tempNode);
 
-    // Account for toggle button: right: -5px, width: 10px means it extends 5px beyond the right edge
     const toggleBuffer = hasChildren ? 5 : 0;
-
-    // Add a small buffer for safety and consistent look
-    return Math.max(80, width + toggleBuffer + 2);
+    return {
+        width: Math.max(80, width + toggleBuffer + 2),
+        height: Math.max(options.nodeHeight, height + 4)
+    };
 }
 
 /**
@@ -207,7 +208,7 @@ function applyDagreLayout(
 
     // Add nodes to the graph
     for (const node of nodes) {
-        const width = measureNodeWidth(
+        const dims = measureNodeDimensions(
             node.data.topic,
             !!node.data.isImage,
             !!node.data.isRoot,
@@ -216,8 +217,8 @@ function applyDagreLayout(
             options
         );
         g.setNode(node.id, {
-            width: width,
-            height: options.nodeHeight,
+            width: dims.width,
+            height: dims.height,
         });
     }
 
@@ -229,8 +230,8 @@ function applyDagreLayout(
     // Calculate layout
     dagre.layout(g);
 
-    // Post-processing: Align siblings under the same parent to the same X coordinate.
-    // We only do this for Right (LR) direction for now.
+    // Post-processing: Align siblings and clear parents via "Shift" strategy.
+    // This preserves Dagre's non-overlap guarantees because we NEVER move nodes to the left.
     const positionMap = new Map<string, { x: number, y: number, width: number }>();
     if (options.direction === 1) { // Right
         const edgeMap = new Map<string, string[]>(); // parentId -> childIds
@@ -242,57 +243,74 @@ function applyDagreLayout(
         const visited = new Set<string>();
         const rootNodes = nodes.filter(n => n.data.isRoot);
 
-        const alignSubtree = (parentId: string, parentX: number, parentWidth: number) => {
+        // Map to store current calculated LEFT X for each node
+        const currentXMap = new Map<string, number>();
+
+        // 1. Initialize with Dagre's default "left" positions
+        nodes.forEach(node => {
+            const meta = g.node(node.id);
+            currentXMap.set(node.id, meta.x - meta.width / 2);
+        });
+
+        const shiftSubtree = (nodeId: string, shift: number) => {
+            currentXMap.set(nodeId, (currentXMap.get(nodeId) || 0) + shift);
+            const children = edgeMap.get(nodeId) || [];
+            children.forEach(childId => shiftSubtree(childId, shift));
+        };
+
+        const alignSubtrees = (parentId: string) => {
             const children = edgeMap.get(parentId) || [];
             if (children.length === 0) return;
 
-            // Alignment X is strictly relative to the parent's boundaries
-            const alignmentX = parentX + parentWidth + options.horizontalGap;
+            const parentMeta = g.node(parentId);
+            const parentX = currentXMap.get(parentId)!;
 
-            // Apply this alignmentX to all siblings and recurse
+            // Target alignment X for children. 
+            // Must clear the parent AND be at least as far right as the right-most Dagre suggested start.
+            let targetX = parentX + parentMeta.width + options.horizontalGap;
+
             for (const childId of children) {
-                if (visited.has(childId)) continue;
-                visited.add(childId);
+                targetX = Math.max(targetX, currentXMap.get(childId)!);
+            }
 
-                const meta = g.node(childId);
-                positionMap.set(childId, {
-                    x: alignmentX,
-                    y: meta.y - meta.height / 2,
-                    width: meta.width
-                });
-
-                alignSubtree(childId, alignmentX, meta.width);
+            // Apply shifts
+            for (const childId of children) {
+                const currentChildX = currentXMap.get(childId)!;
+                if (targetX > currentChildX) {
+                    shiftSubtree(childId, targetX - currentChildX);
+                }
+                alignSubtrees(childId);
             }
         };
 
-        rootNodes.forEach(root => {
-            const meta = g.node(root.id);
-            const rootX = meta.x - meta.width / 2;
-            positionMap.set(root.id, { x: rootX, y: meta.y - meta.height / 2, width: meta.width });
-            visited.add(root.id);
-            alignSubtree(root.id, rootX, meta.width);
+        rootNodes.forEach(root => alignSubtrees(root.id));
+
+        // Transfer final positions to positionMap
+        nodes.forEach(node => {
+            const meta = g.node(node.id);
+            positionMap.set(node.id, {
+                x: currentXMap.get(node.id)!,
+                y: meta.y - meta.height / 2,
+                width: meta.width
+            });
         });
     }
 
     // Apply calculated positions back to nodes
     return nodes.map((node) => {
-        const pos = positionMap.get(node.id) || (() => {
-            const meta = g.node(node.id);
-            return {
-                x: meta.x - meta.width / 2,
-                y: meta.y - meta.height / 2,
-                width: meta.width
-            };
-        })();
+        const meta = g.node(node.id);
+        const customPos = positionMap.get(node.id);
 
         return {
             ...node,
             position: {
-                x: pos.x,
-                y: pos.y,
+                // Use custom X if available (Right direction), otherwise Dagre default
+                x: customPos ? customPos.x : (meta.x - meta.width / 2),
+                // Use Dagre default Y for ALL nodes
+                y: meta.y - meta.height / 2,
             },
             style: {
-                width: pos.width,
+                width: meta.width,
             }
         };
     });
