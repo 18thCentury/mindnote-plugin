@@ -12,6 +12,8 @@ export interface LayoutOptions {
     nodeHeight: number;
     horizontalGap: number;
     verticalGap: number;
+    fontSize?: number;
+    fontFamily?: string;
 }
 
 // Add index signature to satisfy React Flow's Record<string, unknown> requirement
@@ -33,11 +35,67 @@ export interface MindMapNodeData {
 
 const DEFAULT_OPTIONS: LayoutOptions = {
     direction: 1, // Right
-    nodeWidth: 150,
+    nodeWidth: 150, // Default minimum width
     nodeHeight: 40,
     horizontalGap: 50,
     verticalGap: 20,
+    fontSize: 14,
+    fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
 };
+
+// Helper to get computed styles for measurement
+let measurementContainer: HTMLDivElement | null = null;
+
+function getMeasurementContainer(): HTMLDivElement {
+    if (!measurementContainer) {
+        measurementContainer = document.createElement('div');
+        measurementContainer.style.position = 'absolute';
+        measurementContainer.style.visibility = 'hidden';
+        measurementContainer.style.top = '-9999px';
+        measurementContainer.style.left = '-9999px';
+        document.body.appendChild(measurementContainer);
+    }
+    return measurementContainer;
+}
+
+function measureNodeWidth(topic: string, isImage: boolean, options: LayoutOptions): number {
+    if (isImage) return options.nodeWidth; // Use default node width for images or separate config
+    if (typeof document === 'undefined') return 150; // Server-side fallback
+
+    const container = getMeasurementContainer();
+    const tempNode = document.createElement('div');
+
+    // mimic .mindmap-node and .mindmap-node-content structure
+    // We need to apply the classes that affect width/font
+    tempNode.className = 'mindmap-node';
+
+    // Add inline styles to ensure it doesn't get constrained by parent width during measurement
+    tempNode.style.width = 'max-content';
+    tempNode.style.display = 'inline-block';
+
+    // Create content structure similar to actual node
+    // Padding and borders are on .mindmap-node
+    // Text content is inside .mindmap-node-content -> .mindmap-node-topic
+    const content = document.createElement('div');
+    content.className = 'mindmap-node-content';
+
+    const topicSpan = document.createElement('span');
+    topicSpan.className = 'mindmap-node-topic';
+    topicSpan.textContent = topic;
+
+    content.appendChild(topicSpan);
+    tempNode.appendChild(content);
+    container.appendChild(tempNode);
+
+    // Measure
+    const width = tempNode.offsetWidth;
+
+    // Cleanup
+    container.removeChild(tempNode);
+
+    // Add a small buffer for safety and consistent look
+    return Math.max(80, width + 10);
+}
 
 /**
  * Convert MindNode tree to flat arrays of nodes and edges for React Flow
@@ -129,8 +187,9 @@ function applyDagreLayout(
 
     // Add nodes to the graph
     for (const node of nodes) {
+        const width = measureNodeWidth(node.data.topic, !!node.data.isImage, options);
         g.setNode(node.id, {
-            width: options.nodeWidth,
+            width: width,
             height: options.nodeHeight,
         });
     }
@@ -143,15 +202,95 @@ function applyDagreLayout(
     // Calculate layout
     dagre.layout(g);
 
+    // Post-processing: Compact X coordinates to fix "wide sibling" gap issue
+    // We keep Dagre's Y-coordinates (rank separation) but manually calculate X based on parent-child chain
+    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    const edgeMap = new Map<string, string[]>(); // parentId -> childIds
+
+    edges.forEach(edge => {
+        const source = edge.source;
+        const target = edge.target;
+        if (!edgeMap.has(source)) edgeMap.set(source, []);
+        edgeMap.get(source)?.push(target);
+    });
+
+    const visited = new Set<string>();
+    const rootNodes = nodes.filter(n => n.data.isRoot);
+
+    // Helper to get measured dimensions from Dagre graph
+    const getNodeMeta = (id: string) => g.node(id);
+
+    function compactCoordinates(nodeId: string, parentX?: number, parentWidth?: number) {
+        if (visited.has(nodeId)) return;
+        visited.add(nodeId);
+
+        const nodeMeta = getNodeMeta(nodeId);
+        const node = nodeMap.get(nodeId);
+
+        if (!node || !nodeMeta) return;
+
+        // Calculate new X
+        let newX = nodeMeta.x; // Fallback to Dagre's center X
+
+        if (parentX !== undefined && parentWidth !== undefined) {
+            // Compact logic: Parent Left + Parent Width + Gap
+            // Note: nodeMeta.width is the full width. 
+            // Position in React Flow makes 'x' the left-top corner.
+            // But here we are calculating specific positions. 
+            // Let's standardize on calculating the LEFT edge (React Flow 'x').
+
+            // parentX is the parent's LEFT edge.
+            newX = parentX + parentWidth + options.horizontalGap;
+        } else {
+            // Root node or detached: convert Dagre center-X to Left-X
+            newX = nodeMeta.x - nodeMeta.width / 2;
+        }
+
+        // Store the calculated LEFT X in the node wrapper for now (or directly update)
+        // We can't mutate 'node' directly safely if it's reused, but here 'nodes' is a fresh array from convertToFlowElements.
+        // We will store it in a map or just update a temporary structure. 
+        // Let's use a position map.
+        positionMap.set(nodeId, { x: newX, y: nodeMeta.y - nodeMeta.height / 2, width: nodeMeta.width });
+
+        // Recurse children
+        const children = edgeMap.get(nodeId) || [];
+        for (const childId of children) {
+            compactCoordinates(childId, newX, nodeMeta.width);
+        }
+    }
+
+    const positionMap = new Map<string, { x: number, y: number, width: number }>();
+
+    // Start traversal from roots
+    rootNodes.forEach(root => compactCoordinates(root.id));
+
+    // Handle any disconnected nodes that weren't reached (fallback to safe Dagre values)
+    nodes.forEach(node => {
+        if (!visited.has(node.id)) {
+            const meta = getNodeMeta(node.id);
+            positionMap.set(node.id, {
+                x: meta.x - meta.width / 2,
+                y: meta.y - meta.height / 2,
+                width: meta.width
+            });
+        }
+    });
+
     // Apply calculated positions back to nodes
     return nodes.map((node) => {
-        const nodeWithPosition = g.node(node.id);
+        const pos = positionMap.get(node.id)!;
         return {
             ...node,
             position: {
-                x: nodeWithPosition.x - options.nodeWidth / 2,
-                y: nodeWithPosition.y - options.nodeHeight / 2,
+                x: pos.x,
+                y: pos.y,
             },
+            style: {
+                // Explicitly set width in style to ensure React Flow knows it, 
+                // though MindMapNode component handles sizing mostly. 
+                // Setting width here helps RF handle handles correctly if needed.
+                width: pos.width,
+            }
         };
     });
 }
