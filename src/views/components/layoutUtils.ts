@@ -229,17 +229,70 @@ function applyDagreLayout(
     // Calculate layout
     dagre.layout(g);
 
+    // Post-processing: Align siblings under the same parent to the same X coordinate.
+    // We only do this for Right (LR) direction for now.
+    const positionMap = new Map<string, { x: number, y: number, width: number }>();
+    if (options.direction === 1) { // Right
+        const edgeMap = new Map<string, string[]>(); // parentId -> childIds
+        edges.forEach(edge => {
+            if (!edgeMap.has(edge.source)) edgeMap.set(edge.source, []);
+            edgeMap.get(edge.source)?.push(edge.target);
+        });
+
+        const visited = new Set<string>();
+        const rootNodes = nodes.filter(n => n.data.isRoot);
+
+        const alignSubtree = (parentId: string, parentX: number, parentWidth: number) => {
+            const children = edgeMap.get(parentId) || [];
+            if (children.length === 0) return;
+
+            // Alignment X is strictly relative to the parent's boundaries
+            const alignmentX = parentX + parentWidth + options.horizontalGap;
+
+            // Apply this alignmentX to all siblings and recurse
+            for (const childId of children) {
+                if (visited.has(childId)) continue;
+                visited.add(childId);
+
+                const meta = g.node(childId);
+                positionMap.set(childId, {
+                    x: alignmentX,
+                    y: meta.y - meta.height / 2,
+                    width: meta.width
+                });
+
+                alignSubtree(childId, alignmentX, meta.width);
+            }
+        };
+
+        rootNodes.forEach(root => {
+            const meta = g.node(root.id);
+            const rootX = meta.x - meta.width / 2;
+            positionMap.set(root.id, { x: rootX, y: meta.y - meta.height / 2, width: meta.width });
+            visited.add(root.id);
+            alignSubtree(root.id, rootX, meta.width);
+        });
+    }
+
     // Apply calculated positions back to nodes
     return nodes.map((node) => {
-        const meta = g.node(node.id);
+        const pos = positionMap.get(node.id) || (() => {
+            const meta = g.node(node.id);
+            return {
+                x: meta.x - meta.width / 2,
+                y: meta.y - meta.height / 2,
+                width: meta.width
+            };
+        })();
+
         return {
             ...node,
             position: {
-                x: meta.x - meta.width / 2,
-                y: meta.y - meta.height / 2,
+                x: pos.x,
+                y: pos.y,
             },
             style: {
-                width: meta.width,
+                width: pos.width,
             }
         };
     });
