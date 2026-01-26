@@ -412,10 +412,7 @@ export class StateSynchronizer {
             return;
         }
 
-        // Save and close current
-        await this.closeCurrentMarkdown();
-
-        // Open new
+        // Determine the file path
         const filePath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
         let file = this.app.vault.getAbstractFileByPath(filePath);
 
@@ -427,10 +424,27 @@ export class StateSynchronizer {
         }
 
         if (file instanceof TFile) {
-            const leaf = this.app.workspace.getLeaf('split', 'vertical');
-            await leaf.openFile(file, { active: options.active });
-            this.currentOpenNode = targetNode;
-            this.currentLeaf = leaf;
+            // Check if we can reuse the current leaf
+            let leaf = this.currentLeaf;
+
+            // Verify if the leaf is still attached to the workspace
+            let existsInWorkspace = false;
+            if (leaf) {
+                this.app.workspace.iterateAllLeaves((l) => {
+                    if (l === leaf) existsInWorkspace = true;
+                });
+            }
+
+            if (!existsInWorkspace || !leaf) {
+                // Create a new split if no valid leaf exists
+                leaf = this.app.workspace.getLeaf('split', 'vertical');
+            }
+
+            if (leaf) {
+                await leaf.openFile(file, { active: options.active });
+                this.currentOpenNode = targetNode;
+                this.currentLeaf = leaf;
+            }
         }
     }
 

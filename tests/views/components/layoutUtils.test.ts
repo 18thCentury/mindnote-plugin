@@ -143,6 +143,125 @@ describe('layoutUtils', () => {
             expect(nodes[0].data.onToggleExpand).toBe(onToggleExpand);
             expect(nodes[0].data.onNodeRename).toBe(onNodeRename);
         });
+
+        it('should left-align nodes in the same rank', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Short',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'child1',
+                        topic: 'Very Long Topic Name That Increases Width',
+                        filepath: 'child1.md',
+                        children: [],
+                        expanded: true,
+                    },
+                    {
+                        id: 'child2',
+                        topic: 'Short',
+                        filepath: 'child2.md',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const { nodes } = convertToFlowElements(tree);
+            const child1 = nodes.find(n => n.id === 'child1');
+            const child2 = nodes.find(n => n.id === 'child2');
+
+            // Both children are in the same rank, so their X should be equal
+            expect(child1?.position.x).toBe(child2?.position.x);
+        });
+
+        it('should align sibling groups independently', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'parentA',
+                        topic: 'Very Very Very Long Parent A Name',
+                        filepath: 'a.md',
+                        children: [
+                            { id: 'childA1', topic: 'Short', filepath: 'a1.md', children: [], expanded: true },
+                            { id: 'childA2', topic: 'Very Very Very Long Sibling Topic', filepath: 'a2.md', children: [], expanded: true }
+                        ],
+                        expanded: true,
+                    },
+                    {
+                        id: 'parentB',
+                        topic: 'Parent B',
+                        filepath: 'b.md',
+                        children: [
+                            { id: 'childB1', topic: 'Short', filepath: 'b1.md', children: [], expanded: true }
+                        ],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const { nodes } = convertToFlowElements(tree);
+            const childA1 = nodes.find(n => n.id === 'childA1');
+            const childB1 = nodes.find(n => n.id === 'childB1');
+
+            // Both childA1 and childB1 are in the same rank (column).
+            // childA1 has a very wide sibling (childA2) in the same rank.
+            // Our logic should align childA1 to childA2's left edge.
+            // childB1 however is a sibling of childB1 (self) only, so it stays centered (locally left-aligned).
+            // This proves that alignment is scoped to sibling groups.
+
+            expect(childA1?.position.x).not.toBe(childB1?.position.x);
+        });
+
+        it('should maintain consistent horizontal gaps', () => {
+            const horizontalGap = 60;
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'p1',
+                        topic: 'Parent 1 (Longer Topic Name)',
+                        filepath: 'p1.md',
+                        children: [
+                            {
+                                id: 'c1',
+                                topic: 'Child 1',
+                                filepath: 'c1.md',
+                                children: [
+                                    { id: 'gc1', topic: 'GC1', filepath: 'gc1.md', children: [], expanded: true }
+                                ],
+                                expanded: true
+                            }
+                        ],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const { nodes } = convertToFlowElements(tree, { horizontalGap });
+
+            const root = nodes.find(n => n.id === 'root')!;
+            const p1 = nodes.find(n => n.id === 'p1')!;
+            const c1 = nodes.find(n => n.id === 'c1')!;
+            const gc1 = nodes.find(n => n.id === 'gc1')!;
+
+            const rootWidth = root.style!.width as number;
+            const p1Width = p1.style!.width as number;
+            const c1Width = c1.style!.width as number;
+
+            // Verify gaps: child.left - (parent.left + parent.width) === gap
+            expect(p1.position.x - (root.position.x + rootWidth)).toBe(horizontalGap);
+            expect(c1.position.x - (p1.position.x + p1Width)).toBe(horizontalGap);
+            expect(gc1.position.x - (c1.position.x + c1Width)).toBe(horizontalGap);
+        });
     });
 
     describe('findNodeInTree', () => {
