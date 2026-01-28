@@ -51,7 +51,7 @@ function MindMapNodeComponent(props: NodeProps) {
         nodeData.onToggleExpand?.(id);
     }, [id, nodeData]);
 
-    const nodeClass = `mindmap-node ${nodeData.isRoot ? 'mindmap-node-root' : ''} ${selected ? 'mindmap-node-selected' : ''}`;
+    const nodeClass = `mindmap-node ${nodeData.isRoot ? 'mindmap-node-root' : ''} ${selected ? 'mindmap-node-selected' : ''} ${nodeData.isDragging ? 'mindmap-node-dragging' : ''} ${nodeData.dropZone === 'above' ? 'mindmap-drop-above' : ''} ${nodeData.dropZone === 'child' ? 'mindmap-drop-child' : ''} ${nodeData.dropZone === 'below' ? 'mindmap-drop-below' : ''}`.trim();
 
     return (
         <div className={nodeClass} style={style} onDoubleClick={handleDoubleClick}>

@@ -13,6 +13,7 @@ import {
     type Node,
     type Edge,
     type NodeMouseHandler,
+    type OnNodeDrag,
     SelectionMode,
     ReactFlowProvider,
 } from '@xyflow/react';
@@ -26,6 +27,9 @@ import {
     removeNode,
     updateNodeTopic,
     findNodeInTree,
+    moveNodeAsChild,
+    moveNodeAsSiblingAbove,
+    moveNodeAsSiblingBelow,
     type MindMapNodeData,
     type LayoutOptions,
 } from './layoutUtils';
@@ -72,6 +76,17 @@ function MindMapFlowInner({
     const [copiedNode, setCopiedNode] = useState<MindNode | null>(null);
     const [cutNodeId, setCutNodeId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+
+    // Drag and drop state
+    const [dragState, setDragState] = useState<{
+        draggedNodeId: string | null;
+        targetNodeId: string | null;
+        dropZone: 'above' | 'child' | 'below' | null;
+    }>({
+        draggedNodeId: null,
+        targetNodeId: null,
+        dropZone: null,
+    });
 
     // Store current tree state internally for mutations
     const [treeData, setTreeData] = useState<MindNode>(mapData.nodeData);
@@ -152,9 +167,32 @@ function MindMapFlowInner({
                 onNodeRename: handleNodeRename,
             }
         );
-        setNodes(newNodes);
+
+        // Add drag state to nodes
+        const nodesWithDragState = newNodes.map(node => ({
+            ...node,
+            data: {
+                ...node.data,
+                isDragging: false,
+                dropZone: null,
+            },
+        }));
+
+        setNodes(nodesWithDragState);
         setEdges(newEdges);
     }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename]);
+
+    // Update node drag states separately (without regenerating layout)
+    useEffect(() => {
+        setNodes(nds => nds.map(node => ({
+            ...node,
+            data: {
+                ...node.data,
+                isDragging: dragState.draggedNodeId === node.id,
+                dropZone: dragState.targetNodeId === node.id ? dragState.dropZone : null,
+            },
+        })));
+    }, [dragState, setNodes]);
 
     // Handle node selection
     const handleNodeClick: NodeMouseHandler = useCallback((_, node) => {
@@ -166,6 +204,126 @@ function MindMapFlowInner({
             onNodeSelect?.(mindNode);
         }
     }, [onNodeSelect]);
+
+    // Handle drag start
+    const handleNodeDragStart: NodeMouseHandler = useCallback((_, node) => {
+        console.log('🎯 Drag start:', node.id);
+        setDragState({
+            draggedNodeId: node.id,
+            targetNodeId: null,
+            dropZone: null,
+        });
+    }, []);
+
+    // Handle drag - detect drop zone based on mouse position
+    const handleNodeDrag: OnNodeDrag = useCallback((event, node, nodes) => {
+        const draggedId = dragState.draggedNodeId;
+        if (!draggedId || draggedId === node.id) return;
+
+        // Get mouse position from the event
+        const mouseEvent = event as React.MouseEvent;
+        const mouseX = mouseEvent.clientX;
+        const mouseY = mouseEvent.clientY;
+
+        // Find the node being hovered over
+        let targetNode: typeof nodes[0] | null = null;
+        for (const n of nodes) {
+            if (n.id === draggedId) continue; // Skip dragged node itself
+
+            // React Flow wraps nodes in a div with class 'react-flow__node' and data-id attribute
+            const nodeElement = document.querySelector(`.react-flow__node[data-id="${n.id}"]`);
+            if (!nodeElement) continue;
+
+            const rect = nodeElement.getBoundingClientRect();
+
+            // Check if mouse is within node bounds
+            if (mouseX >= rect.left && mouseX <= rect.right &&
+                mouseY >= rect.top && mouseY <= rect.bottom) {
+                targetNode = n;
+                break;
+            }
+        }
+
+        if (!targetNode) {
+            setDragState(prev => ({
+                ...prev,
+                targetNodeId: null,
+                dropZone: null,
+            }));
+            return;
+        }
+
+        // Calculate drop zone based on vertical position
+        const targetElement = document.querySelector(`.react-flow__node[data-id="${targetNode.id}"]`);
+        if (!targetElement) return;
+
+        const rect = targetElement.getBoundingClientRect();
+        const relativeY = (mouseY - rect.top) / rect.height;
+
+        let dropZone: 'above' | 'child' | 'below';
+        if (relativeY < 0.25) {
+            dropZone = 'above';
+        } else if (relativeY > 0.75) {
+            dropZone = 'below';
+        } else {
+            dropZone = 'child';
+        }
+
+        console.log('Drag state update:', {
+            draggedId,
+            targetNodeId: targetNode!.id,
+            dropZone,
+            relativeY,
+        });
+
+        setDragState(prev => ({
+            ...prev,
+            targetNodeId: targetNode!.id,
+            dropZone,
+        }));
+    }, [dragState.draggedNodeId]);
+
+    // Handle drag stop - execute the move
+    const handleNodeDragStop: NodeMouseHandler = useCallback(() => {
+        console.log('🛑 Drag stop');
+        const { draggedNodeId, targetNodeId, dropZone } = dragState;
+
+        if (!draggedNodeId || !targetNodeId || !dropZone) {
+            setDragState({
+                draggedNodeId: null,
+                targetNodeId: null,
+                dropZone: null,
+            });
+            return;
+        }
+
+        const currentTree = treeDataRef.current;
+        let newTree: MindNode;
+
+        switch (dropZone) {
+            case 'child':
+                newTree = moveNodeAsChild(currentTree, draggedNodeId, targetNodeId);
+                break;
+            case 'above':
+                newTree = moveNodeAsSiblingAbove(currentTree, draggedNodeId, targetNodeId);
+                break;
+            case 'below':
+                newTree = moveNodeAsSiblingBelow(currentTree, draggedNodeId, targetNodeId);
+                break;
+        }
+
+        if (newTree !== currentTree) {
+            setTreeData(newTree);
+            onMapDataChange?.({ nodeData: newTree });
+        }
+
+        // Clear drag state
+        setDragState({
+            draggedNodeId: null,
+            targetNodeId: null,
+            dropZone: null,
+        });
+    }, [dragState, onMapDataChange]);
 
     // Generate unique ID
     const generateId = useCallback(() => {
@@ -335,8 +493,11 @@ function MindMapFlowInner({
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={handleNodeClick}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDrag={handleNodeDrag}
+                onNodeDragStop={handleNodeDragStop}
                 nodeTypes={nodeTypes}
-                nodesDraggable={false}
+                nodesDraggable={true}
                 nodesConnectable={false}
                 elementsSelectable={true}
                 selectionMode={SelectionMode.Partial}
