@@ -385,7 +385,15 @@ export class StateSynchronizer {
     /**
      * Open the markdown file associated with a node
      */
+    private openFileRequestId = 0;
+
+    /**
+     * Open the markdown file associated with a node
+     */
     async openNodeMarkdown(node: MindNode, options: { active: boolean } = { active: true }): Promise<void> {
+        // Increment request ID to invalidate previous pending requests
+        const requestId = ++this.openFileRequestId;
+
         // Use authoritative node state to get filepath
         // The UI node might be stale (missing filepath after creation)
         let targetNode = node;
@@ -396,9 +404,23 @@ export class StateSynchronizer {
             }
         }
 
-        // If no filepath exists, create the markdown file now
-        if (!targetNode.filepath) {
+        // Optimization: Fast path if file already exists
+        // Check Obsidian cache directly (synchronous & fast)
+        let fileExists = false;
+        if (targetNode.filepath) {
+            const existingPath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
+            const existingFile = this.app.vault.getAbstractFileByPath(existingPath);
+            if (existingFile instanceof TFile) {
+                fileExists = true;
+            }
+        }
+
+        // If no filepath exists or file missing, create the markdown file now
+        if (!fileExists) {
             await this.ensureNodeHasMarkdown(targetNode);
+
+            // Check for cancellation after async op
+            if (this.openFileRequestId !== requestId) return;
         }
 
         // Still no filepath? Something went wrong
@@ -416,10 +438,16 @@ export class StateSynchronizer {
         const filePath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
         let file = this.app.vault.getAbstractFileByPath(filePath);
 
-        // If file doesn't exist on disk, create it
+        // If file doesn't exist on disk (unlikely given check above, but possible race), create it
         if (!(file instanceof TFile)) {
             await this.fsm.ensureDirectory(this.getMdFolderPath());
+            // Check cancellation
+            if (this.openFileRequestId !== requestId) return;
+
             await this.fsm.createFile(filePath, '');
+            // Check cancellation
+            if (this.openFileRequestId !== requestId) return;
+
             file = this.app.vault.getAbstractFileByPath(filePath);
         }
 
@@ -441,7 +469,14 @@ export class StateSynchronizer {
             }
 
             if (leaf) {
+                // Request cancellation check one last time before UI update
+                if (this.openFileRequestId !== requestId) return;
+
                 await leaf.openFile(file, { active: options.active });
+
+                // Final check to ensure we don't update state if another request came in during openFile
+                if (this.openFileRequestId !== requestId) return;
+
                 this.currentOpenNode = targetNode;
                 this.currentLeaf = leaf;
             }
