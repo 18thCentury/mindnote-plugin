@@ -33,6 +33,7 @@ export interface MindMapNodeData {
     onNodeRename?: (nodeId: string, newTopic: string) => void;
     isDragging?: boolean;
     dropZone?: 'above' | 'child' | 'below' | null;
+    startEditTs?: number;
 }
 
 const DEFAULT_OPTIONS: LayoutOptions = {
@@ -140,6 +141,7 @@ export function convertToFlowElements(
     callbacks?: {
         onToggleExpand?: (nodeId: string) => void;
         onNodeRename?: (nodeId: string, newTopic: string) => void;
+        editTrigger?: { id: string; ts: number } | null;
     }
 ): { nodes: Node<MindMapNodeData>[]; edges: Edge[] } {
     const opts = { ...DEFAULT_OPTIONS, ...options };
@@ -167,6 +169,7 @@ export function convertToFlowElements(
                 depth,
                 onToggleExpand: callbacks?.onToggleExpand,
                 onNodeRename: callbacks?.onNodeRename,
+                startEditTs: callbacks?.editTrigger?.id === node.id ? callbacks.editTrigger.ts : undefined,
             },
         });
 
@@ -516,7 +519,7 @@ export function moveNodeAsSiblingAbove(root: MindNode, nodeId: string, targetId:
             if (targetIndex === -1) return node;
 
             const newChildren = [...node.children];
-            newChildren.splice(targetIndex, 0, nodeToMove);
+            newChildren.splice(targetIndex, 0, nodeToMove!);
 
             return {
                 ...node,
@@ -566,7 +569,7 @@ export function moveNodeAsSiblingBelow(root: MindNode, nodeId: string, targetId:
             if (targetIndex === -1) return node;
 
             const newChildren = [...node.children];
-            newChildren.splice(targetIndex + 1, 0, nodeToMove);
+            newChildren.splice(targetIndex + 1, 0, nodeToMove!);
 
             return {
                 ...node,
@@ -585,4 +588,37 @@ export function moveNodeAsSiblingBelow(root: MindNode, nodeId: string, targetId:
     }
 
     return insertBelow(safeTree);
+}
+
+/**
+ * Add a sibling node
+ */
+export function addSiblingNode(root: MindNode, siblingId: string, newNode: MindNode, direction: 'above' | 'below'): MindNode {
+    // 1. Traverse to find parent of siblingId
+    function traverse(node: MindNode): MindNode {
+        if (node.children) {
+            const index = node.children.findIndex(c => c.id === siblingId);
+            if (index !== -1) {
+                // Found parent!
+                const newChildren = [...node.children];
+                if (direction === 'above') {
+                    newChildren.splice(index, 0, newNode);
+                } else {
+                    newChildren.splice(index + 1, 0, newNode);
+                }
+                return { ...node, children: newChildren };
+            }
+            // Continue search
+            return {
+                ...node,
+                children: node.children.map(traverse)
+            };
+        }
+        return node;
+    }
+
+    // Check if root is sibling (cannot add sibling to root usually, unless forest, but here single tree)
+    if (root.id === siblingId) return root;
+
+    return traverse(root);
 }

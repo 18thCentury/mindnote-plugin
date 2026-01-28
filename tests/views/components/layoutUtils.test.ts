@@ -9,6 +9,7 @@ import {
     addChildNode,
     removeNode,
     updateNodeTopic,
+    addSiblingNode,
 } from '../../../src/views/components/layoutUtils';
 import type { MindNode } from '../../../src/types';
 
@@ -380,6 +381,43 @@ describe('layoutUtils', () => {
 
             const original = findNodeInTree(tree, 'child1');
             expect(original?.topic).toBe('Child 1');
+        });
+    });
+    describe('addSiblingNode', () => {
+        it('should add sibling below', () => {
+            const tree = createSampleTree();
+            const newNode: MindNode = {
+                id: 'sibling',
+                topic: 'New Sibling',
+                filepath: 'sibling.md',
+                children: [],
+                expanded: true,
+            };
+
+            const updated = addSiblingNode(tree, 'child1', newNode, 'below');
+            const root = findNodeInTree(updated, 'root');
+
+            expect(root?.children).toHaveLength(3);
+            expect(root?.children![1].id).toBe('sibling');
+            expect(root?.children![0].id).toBe('child1');
+        });
+
+        it('should add sibling above', () => {
+            const tree = createSampleTree();
+            const newNode: MindNode = {
+                id: 'sibling',
+                topic: 'New Sibling',
+                filepath: 'sibling.md',
+                children: [],
+                expanded: true,
+            };
+
+            const updated = addSiblingNode(tree, 'child1', newNode, 'above');
+            const root = findNodeInTree(updated, 'root');
+
+            expect(root?.children).toHaveLength(3);
+            expect(root?.children![0].id).toBe('sibling');
+            expect(root?.children![1].id).toBe('child1');
         });
     });
 });

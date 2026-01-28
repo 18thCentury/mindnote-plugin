@@ -17,10 +17,23 @@ function MindMapNodeComponent(props: NodeProps) {
 
     useEffect(() => {
         if (isEditing && inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
+            // Use setTimeout to ensure focus happens after any potential 
+            // layout updates or other focus events (like from React Flow)
+            setTimeout(() => {
+                inputRef.current?.focus();
+                inputRef.current?.select();
+            }, 10);
         }
     }, [isEditing]);
+
+    const lastEditTsRef = useRef<number | undefined>(undefined);
+
+    useEffect(() => {
+        if (nodeData.startEditTs && nodeData.startEditTs !== lastEditTsRef.current) {
+            lastEditTsRef.current = nodeData.startEditTs;
+            setIsEditing(true);
+        }
+    }, [nodeData.startEditTs]);
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -39,8 +52,12 @@ function MindMapNodeComponent(props: NodeProps) {
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
+            e.preventDefault(); // Prevent duplicate newlines or form submit
+            e.nativeEvent.stopImmediatePropagation(); // Stop native bubbling to document
+            e.stopPropagation(); // Stop React bubbling
             handleBlur();
         } else if (e.key === 'Escape') {
+            e.stopPropagation();
             setEditValue(nodeData.topic);
             setIsEditing(false);
         }
@@ -82,7 +99,7 @@ function MindMapNodeComponent(props: NodeProps) {
                         onChange={(e) => setEditValue(e.target.value)}
                         onBlur={handleBlur}
                         onKeyDown={handleKeyDown}
-                        className="mindmap-node-input"
+                        className="mindmap-node-input nodrag"
                     />
                 ) : nodeData.isImage && nodeData.imageUrl ? (
                     <img

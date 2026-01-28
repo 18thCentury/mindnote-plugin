@@ -25,8 +25,10 @@ import {
     toggleNodeExpanded,
     addChildNode,
     removeNode,
+    addSiblingNode,
     updateNodeTopic,
     findNodeInTree,
+    findParentNode,
     moveNodeAsChild,
     moveNodeAsSiblingAbove,
     moveNodeAsSiblingBelow,
@@ -72,9 +74,10 @@ function MindMapFlowInner({
 }: MindMapFlowProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-    const [copiedNode, setCopiedNode] = useState<MindNode | null>(null);
-    const [cutNodeId, setCutNodeId] = useState<string | null>(null);
+    const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+    const [copiedNodes, setCopiedNodes] = useState<MindNode[]>([]);
+    const [cutNodeIds, setCutNodeIds] = useState<Set<string>>(new Set());
+    const [editTrigger, setEditTrigger] = useState<{ id: string; ts: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Drag and drop state
@@ -165,12 +168,14 @@ function MindMapFlowInner({
             {
                 onToggleExpand: handleToggleExpand,
                 onNodeRename: handleNodeRename,
+                editTrigger: editTrigger,
             }
         );
 
         // Add drag state to nodes
         const nodesWithDragState = newNodes.map(node => ({
             ...node,
+            selected: selectedNodeIds.has(node.id),
             data: {
                 ...node.data,
                 isDragging: false,
@@ -180,7 +185,7 @@ function MindMapFlowInner({
 
         setNodes(nodesWithDragState);
         setEdges(newEdges);
-    }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename]);
+    }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename, editTrigger]);
 
     // Update node drag states separately (without regenerating layout)
     useEffect(() => {
@@ -195,8 +200,19 @@ function MindMapFlowInner({
     }, [dragState, setNodes]);
 
     // Handle node selection
-    const handleNodeClick: NodeMouseHandler = useCallback((_, node) => {
-        setSelectedNodeId(node.id);
+    const handleNodeClick: NodeMouseHandler = useCallback((event, node) => {
+        const isMultiSelect = event.shiftKey || event.ctrlKey || event.metaKey;
+
+        setSelectedNodeIds(prev => {
+            const next = new Set(isMultiSelect ? prev : []);
+            if (isMultiSelect && prev.has(node.id)) {
+                next.delete(node.id);
+            } else {
+                next.add(node.id);
+            }
+            return next;
+        });
+
         // Use ref to get current tree data (avoids stale closure)
         const currentTree = treeDataRef.current;
         const mindNode = findNodeInTree(currentTree, node.id);
@@ -205,14 +221,32 @@ function MindMapFlowInner({
         }
     }, [onNodeSelect]);
 
+    const handlePaneClick = useCallback(() => {
+        setSelectedNodeIds(new Set());
+    }, []);
+
     // Handle drag start
-    const handleNodeDragStart: NodeMouseHandler = useCallback((_, node) => {
+    const handleNodeDragStart: NodeMouseHandler = useCallback((event, node) => {
+        // If dragging a node that is NOT selected, select it exclusively
+        // Check modifiers to allow adding to selection on drag start? 
+        // Standard behavior: if modifier held, add to selection. If not, and node not selected, select only it.
+        // If node ALREADY selected, keep selection (to allow dragging group).
+
+        const isSelected = selectedNodeIds.has(node.id);
+        const isModifier = event.shiftKey || event.ctrlKey || event.metaKey;
+
+        if (!isSelected && !isModifier) {
+            setSelectedNodeIds(new Set([node.id]));
+        } else if (!isSelected && isModifier) {
+            setSelectedNodeIds(prev => new Set([...prev, node.id]));
+        }
+
         setDragState({
             draggedNodeId: node.id,
             targetNodeId: null,
             dropZone: null,
         });
-    }, []);
+    }, [selectedNodeIds]);
 
     // Handle drag - detect drop zone based on mouse position
     const handleNodeDrag: OnNodeDrag = useCallback((event, node, nodes) => {
@@ -277,27 +311,67 @@ function MindMapFlowInner({
                 targetNodeId: null,
                 dropZone: null,
             });
+            // Force layout reset to snap back nodes
+            setTreeData(prev => ({ ...prev }));
             return;
         }
 
         const currentTree = treeDataRef.current;
-        let newTree: MindNode;
+        let newTree = currentTree;
 
-        switch (dropZone) {
-            case 'child':
-                newTree = moveNodeAsChild(currentTree, draggedNodeId, targetNodeId);
-                break;
-            case 'above':
-                newTree = moveNodeAsSiblingAbove(currentTree, draggedNodeId, targetNodeId);
-                break;
-            case 'below':
-                newTree = moveNodeAsSiblingBelow(currentTree, draggedNodeId, targetNodeId);
-                break;
+        // Determine nodes to move
+        // If dragged node matches a selected node, move all selected nodes
+        // Otherwise just move the dragged one (fallback)
+        // Also ensure current draggedNodeId is included if it wasn't selected (though dragStart handles this)
+        const nodesToMove = selectedNodeIds.has(draggedNodeId)
+            ? Array.from(selectedNodeIds)
+            : [draggedNodeId];
+
+        // Filter out nodes if their ancestor is also being moved to avoid double moves
+        // (If we move default parent + child, child moves implicitly)
+        const independentNodesToMove = nodesToMove.filter(id => {
+            // Check if any ancestor of 'id' is in 'nodesToMove'
+            let walker = findParentNode(currentTree, id);
+            while (walker) {
+                if (nodesToMove.includes(walker.id)) return false;
+                walker = findParentNode(currentTree, walker.id);
+            }
+            return true;
+        });
+
+        let changed = false;
+
+        for (const nodeId of independentNodesToMove) {
+            if (nodeId === targetNodeId) continue;
+
+            // Re-validate tree state for each move since tree changes
+            // Note: Use 'newTree' for moves to chain updates
+            let treeAfterMove = newTree;
+
+            switch (dropZone) {
+                case 'child':
+                    treeAfterMove = moveNodeAsChild(newTree, nodeId, targetNodeId);
+                    break;
+                case 'above':
+                    treeAfterMove = moveNodeAsSiblingAbove(newTree, nodeId, targetNodeId);
+                    break;
+                case 'below':
+                    treeAfterMove = moveNodeAsSiblingBelow(newTree, nodeId, targetNodeId);
+                    break;
+            }
+
+            if (treeAfterMove !== newTree) {
+                newTree = treeAfterMove;
+                changed = true;
+            }
         }
 
-        if (newTree !== currentTree) {
+        if (changed) {
             setTreeData(newTree);
             onMapDataChange?.({ nodeData: newTree });
+        } else {
+            // Snap back if nothing changed
+            setTreeData(prev => ({ ...prev }));
         }
 
         // Clear drag state
@@ -306,17 +380,54 @@ function MindMapFlowInner({
             targetNodeId: null,
             dropZone: null,
         });
-    }, [dragState, onMapDataChange]);
+    }, [dragState, onMapDataChange, selectedNodeIds]);
 
     // Generate unique ID
     const generateId = useCallback(() => {
         return Math.random().toString(16).slice(2, 18);
     }, []);
 
+    // Add sibling
+    const addSibling = useCallback((direction: 'above' | 'below') => {
+        const currentTree = treeDataRef.current;
+        if (selectedNodeIds.size === 0) return;
+
+        // Add sibling to the last selected node
+        const targetId = Array.from(selectedNodeIds)[selectedNodeIds.size - 1];
+        if (targetId === currentTree.id) return; // Root cannot have sibling
+
+        const newNode: MindNode = {
+            id: generateId(),
+            topic: 'New Sibling',
+            filepath: '',
+            children: [],
+            expanded: true,
+        };
+
+        const newTree = addSiblingNode(currentTree, targetId, newNode, direction);
+        setTreeData(newTree);
+        onMapDataChange?.({ nodeData: newTree });
+
+        // Select and edit the new node
+        setSelectedNodeIds(new Set([newNode.id]));
+        // Trigger edit after a short delay to allow render
+        setTimeout(() => {
+            setEditTrigger({ id: newNode.id, ts: Date.now() });
+        }, 50);
+
+    }, [selectedNodeIds, generateId, onMapDataChange]);
+
     // Add child to selected node
     const addChild = useCallback(() => {
         const currentTree = treeDataRef.current;
-        const parentId = selectedNodeId || currentTree.id;
+        // If multiple selected, add to the last selected (or first found). 
+        // For simplicity, prioritize the most recently clicked? 
+        // Set iteration order is insertion order.
+        const targetId = selectedNodeIds.size > 0
+            ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1]
+            : currentTree.id;
+
+        const parentId = targetId || currentTree.id;
         const newNode: MindNode = {
             id: generateId(),
             topic: 'New Node',
@@ -329,24 +440,41 @@ function MindMapFlowInner({
         setTreeData(newTree);
         onMapDataChange?.({ nodeData: newTree });
         onNodeCreate?.(newNode, parentId);
-    }, [selectedNodeId, generateId, onMapDataChange, onNodeCreate]);
+
+        // Select the new node and edit
+        setSelectedNodeIds(new Set([newNode.id]));
+        setTimeout(() => {
+            setEditTrigger({ id: newNode.id, ts: Date.now() });
+        }, 50);
+    }, [selectedNodeIds, generateId, onMapDataChange, onNodeCreate]);
 
     // Delete selected node
     const deleteSelected = useCallback(() => {
         const currentTree = treeDataRef.current;
-        if (!selectedNodeId || selectedNodeId === currentTree.id) return; // Can't delete root
+        if (selectedNodeIds.size === 0) return;
 
-        const nodeToDelete = findNodeInTree(currentTree, selectedNodeId);
-        if (nodeToDelete) {
-            const newTree = removeNode(currentTree, selectedNodeId);
-            if (newTree) {
-                setTreeData(newTree);
-                onMapDataChange?.({ nodeData: newTree });
-                onNodeDelete?.(nodeToDelete);
-                setSelectedNodeId(null);
+        let newTree = currentTree;
+        const deletedNodes: MindNode[] = [];
+
+        selectedNodeIds.forEach(id => {
+            if (id === currentTree.id) return; // Can't delete root
+            const nodeToDelete = findNodeInTree(newTree, id);
+            if (nodeToDelete) {
+                const updatedTree = removeNode(newTree, id);
+                if (updatedTree) {
+                    newTree = updatedTree;
+                    deletedNodes.push(nodeToDelete);
+                }
             }
+        });
+
+        if (newTree !== currentTree) {
+            setTreeData(newTree);
+            onMapDataChange?.({ nodeData: newTree });
+            deletedNodes.forEach(n => onNodeDelete?.(n));
+            setSelectedNodeIds(new Set());
         }
-    }, [selectedNodeId, onMapDataChange, onNodeDelete]);
+    }, [selectedNodeIds, onMapDataChange, onNodeDelete]);
 
     // Deep clone a node for copying
     const cloneNode = useCallback((node: MindNode): MindNode => {
@@ -360,53 +488,81 @@ function MindMapFlowInner({
 
     // Copy node
     const copyNode = useCallback(() => {
-        if (!selectedNodeId) return;
+        if (selectedNodeIds.size === 0) return;
         const currentTree = treeDataRef.current;
-        const node = findNodeInTree(currentTree, selectedNodeId);
-        if (node) {
-            setCopiedNode(node);
-            setCutNodeId(null);
+        const nodes: MindNode[] = [];
+        selectedNodeIds.forEach(id => {
+            const node = findNodeInTree(currentTree, id);
+            if (node) nodes.push(node);
+        });
+
+        if (nodes.length > 0) {
+            setCopiedNodes(nodes);
+            setCutNodeIds(new Set());
         }
-    }, [selectedNodeId]);
+    }, [selectedNodeIds]);
 
     // Cut node
     const cutNode = useCallback(() => {
         const currentTree = treeDataRef.current;
-        if (!selectedNodeId || selectedNodeId === currentTree.id) return;
-        const node = findNodeInTree(currentTree, selectedNodeId);
-        if (node) {
-            setCopiedNode(node);
-            setCutNodeId(selectedNodeId);
+        const nodes: MindNode[] = [];
+        const cutIds = new Set<string>();
+
+        selectedNodeIds.forEach(id => {
+            if (id === currentTree.id) return;
+            const node = findNodeInTree(currentTree, id);
+            if (node) {
+                nodes.push(node);
+                cutIds.add(id);
+            }
+        });
+
+        if (nodes.length > 0) {
+            setCopiedNodes(nodes);
+            setCutNodeIds(cutIds);
         }
-    }, [selectedNodeId]);
+    }, [selectedNodeIds]);
 
     // Paste node
     const pasteNode = useCallback(() => {
-        if (!copiedNode) return;
+        if (copiedNodes.length === 0) return;
         const currentTree = treeDataRef.current;
-        const parentId = selectedNodeId || currentTree.id;
+        // Paste into the last selected node or root
+        const targetId = selectedNodeIds.size > 0
+            ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1]
+            : currentTree.id;
 
-        // Clone the copied node with new IDs
-        const newNode = cloneNode(copiedNode);
+        let newTree = currentTree;
 
-        let newTree = addChildNode(currentTree, parentId, newNode);
+        copiedNodes.forEach(copiedNode => {
+            // Clone the copied node with new IDs
+            const newNode = cloneNode(copiedNode);
+            newTree = addChildNode(newTree, targetId, newNode);
+            onNodeCreate?.(newNode, targetId);
+        });
 
-        // If it was a cut, remove the original
-        if (cutNodeId) {
-            newTree = removeNode(newTree, cutNodeId) || newTree;
-            setCutNodeId(null);
+        // If it was a cut, remove originals
+        if (cutNodeIds.size > 0) {
+            cutNodeIds.forEach(cutId => {
+                const updated = removeNode(newTree, cutId);
+                if (updated) newTree = updated;
+            });
+            setCutNodeIds(new Set());
         }
 
         setTreeData(newTree);
         onMapDataChange?.({ nodeData: newTree });
-        onNodeCreate?.(newNode, parentId);
-    }, [copiedNode, cutNodeId, selectedNodeId, cloneNode, onMapDataChange, onNodeCreate]);
+    }, [copiedNodes, cutNodeIds, selectedNodeIds, cloneNode, onMapDataChange, onNodeCreate]);
 
     // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Check if we're in an input field
+            // Check if we're in an input field (native check)
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+            // Check if contentEditable (just in case)
+            if ((e.target as HTMLElement).isContentEditable) {
                 return;
             }
 
@@ -427,6 +583,21 @@ function MindMapFlowInner({
                 }
             } else {
                 switch (e.key) {
+                    case 'Enter':
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            addSibling('above');
+                        } else {
+                            addSibling('below');
+                        }
+                        break;
+                    case ' ': // Space
+                        e.preventDefault();
+                        if (selectedNodeIds.size > 0) {
+                            const targetId = Array.from(selectedNodeIds)[selectedNodeIds.size - 1];
+                            setEditTrigger({ id: targetId, ts: Date.now() });
+                        }
+                        break;
                     case 'Tab':
                         e.preventDefault();
                         addChild();
@@ -440,11 +611,9 @@ function MindMapFlowInner({
             }
         };
 
-        const container = containerRef.current;
-        container?.addEventListener('keydown', handleKeyDown);
-        return () => container?.removeEventListener('keydown', handleKeyDown);
-    }, [copyNode, cutNode, pasteNode, addChild, deleteSelected]);
-
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
+    }, [copyNode, cutNode, pasteNode, addChild, deleteSelected, addSibling, selectedNodeIds]);
     // Handle drop
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -476,6 +645,7 @@ function MindMapFlowInner({
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onNodeClick={handleNodeClick}
+                onPaneClick={handlePaneClick}
                 onNodeDragStart={handleNodeDragStart}
                 onNodeDrag={handleNodeDrag}
                 onNodeDragStop={handleNodeDragStop}
