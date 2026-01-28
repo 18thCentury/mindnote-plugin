@@ -207,7 +207,6 @@ function MindMapFlowInner({
 
     // Handle drag start
     const handleNodeDragStart: NodeMouseHandler = useCallback((_, node) => {
-        console.log('🎯 Drag start:', node.id);
         setDragState({
             draggedNodeId: node.id,
             targetNodeId: null,
@@ -217,75 +216,59 @@ function MindMapFlowInner({
 
     // Handle drag - detect drop zone based on mouse position
     const handleNodeDrag: OnNodeDrag = useCallback((event, node, nodes) => {
-        const draggedId = dragState.draggedNodeId;
-        if (!draggedId || draggedId === node.id) return;
-
-        // Get mouse position from the event
+        const draggedId = node.id;
+        // Use elementsFromPoint to find all elements at the cursor position
+        // This allows us to "see through" the dragged node if it's blocking the view
         const mouseEvent = event as React.MouseEvent;
         const mouseX = mouseEvent.clientX;
         const mouseY = mouseEvent.clientY;
 
-        // Find the node being hovered over
-        let targetNode: typeof nodes[0] | null = null;
-        for (const n of nodes) {
-            if (n.id === draggedId) continue; // Skip dragged node itself
+        const elements = document.elementsFromPoint(mouseX, mouseY);
 
-            // React Flow wraps nodes in a div with class 'react-flow__node' and data-id attribute
-            const nodeElement = document.querySelector(`.react-flow__node[data-id="${n.id}"]`);
-            if (!nodeElement) continue;
+        let targetNodeId: string | null = null;
+        let dropZone: 'above' | 'child' | 'below' | null = null;
 
-            const rect = nodeElement.getBoundingClientRect();
+        // Find the first element that is a node (but not the dragged one)
+        for (const el of elements) {
+            const nodeEl = el.closest('.react-flow__node');
+            if (nodeEl) {
+                const id = nodeEl.getAttribute('data-id');
+                if (id && id !== draggedId) {
+                    // Found a valid target!
+                    targetNodeId = id;
 
-            // Check if mouse is within node bounds
-            if (mouseX >= rect.left && mouseX <= rect.right &&
-                mouseY >= rect.top && mouseY <= rect.bottom) {
-                targetNode = n;
-                break;
+                    const rect = nodeEl.getBoundingClientRect();
+                    const relativeY = (mouseY - rect.top) / rect.height;
+
+                    if (relativeY < 0.25) {
+                        dropZone = 'above';
+                    } else if (relativeY > 0.75) {
+                        dropZone = 'below';
+                    } else {
+                        dropZone = 'child';
+                    }
+
+                    // console.log('Target found:', { targetNodeId, dropZone, relativeY });
+                    break; // Stop looking once we found the top-most target
+                }
             }
         }
 
-        if (!targetNode) {
-            setDragState(prev => ({
+        // Only update if state changed to avoid excessive re-renders
+        setDragState(prev => {
+            if (prev.targetNodeId === targetNodeId && prev.dropZone === dropZone) {
+                return prev;
+            }
+            return {
                 ...prev,
-                targetNodeId: null,
-                dropZone: null,
-            }));
-            return;
-        }
-
-        // Calculate drop zone based on vertical position
-        const targetElement = document.querySelector(`.react-flow__node[data-id="${targetNode.id}"]`);
-        if (!targetElement) return;
-
-        const rect = targetElement.getBoundingClientRect();
-        const relativeY = (mouseY - rect.top) / rect.height;
-
-        let dropZone: 'above' | 'child' | 'below';
-        if (relativeY < 0.25) {
-            dropZone = 'above';
-        } else if (relativeY > 0.75) {
-            dropZone = 'below';
-        } else {
-            dropZone = 'child';
-        }
-
-        console.log('Drag state update:', {
-            draggedId,
-            targetNodeId: targetNode!.id,
-            dropZone,
-            relativeY,
+                targetNodeId: targetNodeId!,
+                dropZone,
+            };
         });
-
-        setDragState(prev => ({
-            ...prev,
-            targetNodeId: targetNode!.id,
-            dropZone,
-        }));
-    }, [dragState.draggedNodeId]);
+    }, []);
 
     // Handle drag stop - execute the move
     const handleNodeDragStop: NodeMouseHandler = useCallback(() => {
-        console.log('🛑 Drag stop');
         const { draggedNodeId, targetNodeId, dropZone } = dragState;
 
         if (!draggedNodeId || !targetNodeId || !dropZone) {
