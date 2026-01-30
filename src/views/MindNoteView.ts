@@ -245,17 +245,33 @@ export class MindNoteView extends ItemView {
     }
 
     /**
-     * Handle file drop
+     * Handle file drop - add dropped files as children of target node
      */
-    private async handleDrop(files: FileList): Promise<void> {
+    private async handleDrop(files: FileList, targetNodeId: string | null): Promise<void> {
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             try {
                 const relativePath = await this.synchronizer.importImage(file);
 
-                // Get current map data and find selected node
+                // Get current map data
                 const mapData = this.synchronizer.getMapData();
-                const selectedNode = mapData.nodeData; // Default to root if no selection
+
+                // Find the target parent node (use targetNodeId if provided, otherwise root)
+                let parentNode: MindNode = mapData.nodeData;
+                if (targetNodeId) {
+                    const findNode = (node: MindNode, id: string): MindNode | null => {
+                        if (node.id === id) return node;
+                        for (const child of node.children || []) {
+                            const found = findNode(child, id);
+                            if (found) return found;
+                        }
+                        return null;
+                    };
+                    const found = findNode(mapData.nodeData, targetNodeId);
+                    if (found) {
+                        parentNode = found;
+                    }
+                }
 
                 let newNode: MindNode;
 
@@ -279,8 +295,16 @@ export class MindNoteView extends ItemView {
                     };
                 }
 
-                // Add as child of current selection (default to root)
-                this.synchronizer.onNodeCreated(newNode);
+                // Actually add the node to the tree structure
+                parentNode.children = [...(parentNode.children || []), newNode];
+
+                // Save the updated tree structure
+                await this.handleMapDataChange({ nodeData: mapData.nodeData });
+
+                // Trigger file creation for non-image nodes
+                if (!newNode.isImage) {
+                    this.synchronizer.onNodeCreated(newNode);
+                }
 
                 // Re-render with updated data
                 const updatedData = this.synchronizer.getDisplayMapData();

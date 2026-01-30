@@ -56,7 +56,7 @@ export interface MindMapFlowProps {
     onNodeDelete?: (node: MindNode) => void;
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
     onMapDataChange?: (data: MindMapData) => void;
-    onDrop?: (files: FileList) => void;
+    onDrop?: (files: FileList, targetNodeId: string | null) => void;
     resolveImageUrl?: (relativePath: string) => string;
 }
 
@@ -80,15 +80,17 @@ function MindMapFlowInner({
     const [editTrigger, setEditTrigger] = useState<{ id: string; ts: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // Drag and drop state
+    // Drag and drop state (for both internal node drag and external file drop)
     const [dragState, setDragState] = useState<{
         draggedNodeId: string | null;
         targetNodeId: string | null;
         dropZone: 'above' | 'child' | 'below' | null;
+        isExternalFileDrag: boolean;
     }>({
         draggedNodeId: null,
         targetNodeId: null,
         dropZone: null,
+        isExternalFileDrag: false,
     });
 
     // Store current tree state internally for mutations
@@ -101,10 +103,23 @@ function MindMapFlowInner({
         treeDataRef.current = treeData;
     }, [treeData]);
 
-    // Update tree when mapData prop changes (only if it's a NEW map, not internal updates)
+    // Update tree when mapData prop changes
+    // Sync when: 1) different map loaded (root ID changed), or 2) external additions (nodes added outside React Flow)
     useEffect(() => {
-        // Only update if the root node ID changed (different map loaded)
-        if (mapData.nodeData.id !== treeData.id) {
+        // Count nodes in a tree for comparison
+        const countNodes = (node: MindNode): number => {
+            let count = 1;
+            for (const child of node.children || []) {
+                count += countNodes(child);
+            }
+            return count;
+        };
+
+        const mapNodeCount = countNodes(mapData.nodeData);
+        const treeNodeCount = countNodes(treeData);
+
+        // Sync if: root ID changed (different map) OR mapData has more nodes (external addition)
+        if (mapData.nodeData.id !== treeData.id || mapNodeCount > treeNodeCount) {
             setTreeData(mapData.nodeData);
         }
     }, [mapData]);
@@ -245,6 +260,7 @@ function MindMapFlowInner({
             draggedNodeId: node.id,
             targetNodeId: null,
             dropZone: null,
+            isExternalFileDrag: false,
         });
     }, [selectedNodeIds]);
 
@@ -310,6 +326,7 @@ function MindMapFlowInner({
                 draggedNodeId: null,
                 targetNodeId: null,
                 dropZone: null,
+                isExternalFileDrag: false,
             });
             // Force layout reset to snap back nodes
             setTreeData(prev => ({ ...prev }));
@@ -379,6 +396,7 @@ function MindMapFlowInner({
             draggedNodeId: null,
             targetNodeId: null,
             dropZone: null,
+            isExternalFileDrag: false,
         });
     }, [dragState, onMapDataChange, selectedNodeIds]);
 
@@ -614,18 +632,94 @@ function MindMapFlowInner({
         document.addEventListener('keydown', handleKeyDown);
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [copyNode, cutNode, pasteNode, addChild, deleteSelected, addSibling, selectedNodeIds]);
-    // Handle drop
+    // Detect target node during external file drag (reuses logic from handleNodeDrag)
+    const detectTargetNode = useCallback((mouseX: number, mouseY: number): { targetNodeId: string | null; dropZone: 'above' | 'child' | 'below' | null } => {
+        const elements = document.elementsFromPoint(mouseX, mouseY);
+
+        for (const el of elements) {
+            const nodeEl = el.closest('.react-flow__node');
+            if (nodeEl) {
+                const id = nodeEl.getAttribute('data-id');
+                if (id) {
+                    const rect = nodeEl.getBoundingClientRect();
+                    const relativeY = (mouseY - rect.top) / rect.height;
+
+                    let dropZone: 'above' | 'child' | 'below';
+                    if (relativeY < 0.25) {
+                        dropZone = 'above';
+                    } else if (relativeY > 0.75) {
+                        dropZone = 'below';
+                    } else {
+                        dropZone = 'child';
+                    }
+
+                    return { targetNodeId: id, dropZone };
+                }
+            }
+        }
+
+        return { targetNodeId: null, dropZone: null };
+    }, []);
+
+    // Handle external file drag over - detect target nodes for visual feedback
+    const handleDragOver = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+
+        // Check if this is a file drag (has files in dataTransfer)
+        if (e.dataTransfer.types.includes('Files')) {
+            const { targetNodeId, dropZone } = detectTargetNode(e.clientX, e.clientY);
+
+            setDragState(prev => {
+                if (prev.targetNodeId === targetNodeId && prev.dropZone === dropZone && prev.isExternalFileDrag) {
+                    return prev;
+                }
+                return {
+                    draggedNodeId: null,
+                    targetNodeId,
+                    dropZone,
+                    isExternalFileDrag: true,
+                };
+            });
+        }
+    }, [detectTargetNode]);
+
+    // Handle drag leave - clear external drag state
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        // Only clear if leaving the container entirely
+        const relatedTarget = e.relatedTarget as HTMLElement | null;
+        if (!containerRef.current?.contains(relatedTarget)) {
+            setDragState({
+                draggedNodeId: null,
+                targetNodeId: null,
+                dropZone: null,
+                isExternalFileDrag: false,
+            });
+        }
+    }, []);
+
+    // Handle drop - pass target node ID to callback
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
         const files = e.dataTransfer?.files;
         if (files && files.length > 0) {
-            onDrop?.(files);
-        }
-    }, [onDrop]);
+            // Detect target at drop time to avoid stale closure issues
+            const { targetNodeId } = detectTargetNode(e.clientX, e.clientY);
 
-    const handleDragOver = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-    }, []);
+            // Use the detected target node or fall back to selected node
+            const targetId = targetNodeId ||
+                (selectedNodeIds.size > 0 ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1] : null);
+            onDrop?.(files, targetId);
+        }
+
+        // Clear drag state
+        setDragState({
+            draggedNodeId: null,
+            targetNodeId: null,
+            dropZone: null,
+            isExternalFileDrag: false,
+        });
+    }, [onDrop, detectTargetNode, selectedNodeIds]);
 
     // Determine theme
     const isDark = settings.theme === 'dark' ||
@@ -637,6 +731,7 @@ function MindMapFlowInner({
             className="mindmap-flow-container"
             onDrop={handleDrop}
             onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
             tabIndex={0}
         >
             <ReactFlow
