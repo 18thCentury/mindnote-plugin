@@ -118,6 +118,12 @@ export class MindNoteView extends ItemView {
             // Build content map for all nodes
             await this.updateContentMap(mapData.nodeData);
 
+            // Register content change listener to update contentMap when files are modified
+            this.synchronizer.setOnContentChange((nodeId, hasContent) => {
+                this.contentMap.set(nodeId, hasContent);
+                this.rerenderMindMap();
+            });
+
             // Create React root and render
             this.renderReactFlow(container, mapData);
         } catch (error) {
@@ -126,6 +132,18 @@ export class MindNoteView extends ItemView {
                 cls: 'mindnote-error'
             });
             console.error('MindNote load error:', error);
+        }
+    }
+
+    /**
+     * Re-render the mind map with current data
+     */
+    private rerenderMindMap(): void {
+        if (!this.containerEl_) return;
+        const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
+        if (mapContainer) {
+            const mapData = this.synchronizer.getDisplayMapData();
+            this.renderReactFlow(mapContainer, mapData);
         }
     }
 

@@ -15,6 +15,7 @@ export class StateSynchronizer {
     private mapData: MindMapData | null = null;
     private writeQueue: WriteQueue;
     private fileEventUnsubscribe: (() => void) | null = null;
+    private onContentChangeCallback: ((nodeId: string, hasContent: boolean) => void) | null = null;
 
     constructor(
         private app: App,
@@ -580,6 +581,13 @@ export class StateSynchronizer {
     // ============================================================================
 
     /**
+     * Set callback for content changes (used by view to update contentMap)
+     */
+    setOnContentChange(callback: (nodeId: string, hasContent: boolean) => void): void {
+        this.onContentChangeCallback = callback;
+    }
+
+    /**
      * Register file event listeners for external changes
      */
     private registerFileListeners(): void {
@@ -591,6 +599,13 @@ export class StateSynchronizer {
             500,
             true
         );
+
+        // Listen for file modifications
+        const modifyRef = this.app.vault.on('modify', (file) => {
+            if (file instanceof TFile && this.isInBundle(file.path)) {
+                handleFileChange(file);
+            }
+        });
 
         // Listen for file renames
         const renameRef = this.app.vault.on('rename', async (file, oldPath) => {
@@ -608,6 +623,7 @@ export class StateSynchronizer {
 
         // Cleanup function
         this.fileEventUnsubscribe = () => {
+            this.app.vault.offref(modifyRef);
             this.app.vault.offref(renameRef);
             this.app.vault.offref(deleteRef);
         };
@@ -621,10 +637,19 @@ export class StateSynchronizer {
     }
 
     /**
-     * Handle external file change
+     * Handle external file change - notify view of content changes
      */
-    private async onExternalFileChange(_file: TFile): Promise<void> {
-        // Could implement content sync if needed
+    private async onExternalFileChange(file: TFile): Promise<void> {
+        // Only process markdown files in the md folder
+        if (!this.mapData || !file.path.includes('/md/')) return;
+
+        const filename = file.name;
+        const node = this.findNodeByFilepath(this.mapData.nodeData, filename);
+        if (node && this.onContentChangeCallback) {
+            const content = await this.app.vault.read(file);
+            const hasContent = content.trim().length > 0;
+            this.onContentChangeCallback(node.id, hasContent);
+        }
     }
 
     /**

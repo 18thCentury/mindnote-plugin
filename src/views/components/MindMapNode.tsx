@@ -120,7 +120,7 @@ function MindMapNodeComponent(props: NodeProps) {
                     onClick={handleToggleClick}
                     aria-label={nodeData.expanded ? 'Collapse' : 'Expand'}
                 >
-                    {nodeData.expanded ? '−' : '+'}
+                    {nodeData.expanded ? '-' : '+'}
                 </button>
             )}
 
