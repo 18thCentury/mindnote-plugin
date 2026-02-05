@@ -14,6 +14,7 @@ export interface LayoutOptions {
     verticalGap: number;
     fontSize?: number;
     fontFamily?: string;
+    lineWidth: number;
 }
 
 // Add index signature to satisfy React Flow's Record<string, unknown> requirement
@@ -44,6 +45,7 @@ const DEFAULT_OPTIONS: LayoutOptions = {
     verticalGap: 40, // Increased for safer margins
     fontSize: 14,
     fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    lineWidth: 1,
 };
 
 // Helper to get computed styles for measurement
@@ -179,6 +181,7 @@ export function convertToFlowElements(
                 source: parentId,
                 target: node.id,
                 type: 'smoothstep',
+                style: { strokeWidth: opts.lineWidth },
             });
         }
 

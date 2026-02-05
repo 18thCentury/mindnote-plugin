@@ -49,6 +49,7 @@ export interface MindMapFlowProps {
         horizontalGap: number;
         verticalGap: number;
         theme: 'primary' | 'dark' | 'auto';
+        lineWidth: number;
     };
     contentMap: Map<string, boolean>;
     onNodeSelect?: (node: MindNode) => void;
@@ -129,6 +130,7 @@ function MindMapFlowInner({
         direction: settings.direction,
         horizontalGap: settings.horizontalGap,
         verticalGap: settings.verticalGap,
+        lineWidth: settings.lineWidth,
     }), [settings]);
 
     // Handle collapse/expand toggle

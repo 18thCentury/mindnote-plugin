@@ -138,7 +138,7 @@ export class MindNoteView extends ItemView {
     /**
      * Re-render the mind map with current data
      */
-    private rerenderMindMap(): void {
+    public rerenderMindMap(): void {
         if (!this.containerEl_) return;
         const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
         if (mapContainer) {
@@ -186,6 +186,7 @@ export class MindNoteView extends ItemView {
                 horizontalGap: settings.horizontalGap,
                 verticalGap: settings.verticalGap,
                 theme: settings.theme,
+                lineWidth: settings.lineWidth,
             },
             contentMap: this.contentMap,
             onNodeSelect: this.handleNodeSelect.bind(this),
