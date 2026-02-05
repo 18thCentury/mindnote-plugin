@@ -30,7 +30,7 @@ export class MindNoteView extends ItemView {
         this.plugin = plugin;
 
         // Initialize core modules
-        this.fsm = new FileSystemManager(this.app);
+        this.fsm = new FileSystemManager(this.app, () => this.plugin.settings);
         this.txManager = new TransactionManager(this.app);
         this.synchronizer = new StateSynchronizer(this.app, this.fsm, this.txManager);
     }

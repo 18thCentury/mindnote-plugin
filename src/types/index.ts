@@ -45,6 +45,7 @@ export interface MindNoteSettings {
     nodeRadius: number;         // --main-radius
     rootRadius: number;         // --root-radius
     lineWidth: number;          // stroke-width
+    caseSensitiveFilenames: boolean;
 }
 
 export const DEFAULT_SETTINGS: MindNoteSettings = {
@@ -58,6 +59,7 @@ export const DEFAULT_SETTINGS: MindNoteSettings = {
     nodeRadius: 3,
     rootRadius: 3,
     lineWidth: 1,
+    caseSensitiveFilenames: false,
 };
 
 // ============================================================================

@@ -16,6 +16,21 @@ export class MindNoteSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
+        // Files section
+        new Setting(containerEl).setName('Files').setHeading();
+
+        new Setting(containerEl)
+            .setName('Case sensitive filenames')
+            .setDesc('If enabled, "A.md" and "a.md" are treated as different files. Default is strictly case-insensitive to prevent duplicates.')
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.caseSensitiveFilenames)
+                    .onChange(async (value) => {
+                        this.plugin.settings.caseSensitiveFilenames = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
         // Layout section
         new Setting(containerEl).setName('Layout').setHeading();
 

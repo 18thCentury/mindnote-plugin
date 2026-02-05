@@ -4,8 +4,13 @@
  */
 import { App, TFile, TFolder, TAbstractFile, normalizePath, Notice } from 'obsidian';
 
+import { MindNoteSettings } from '../types';
+
 export class FileSystemManager {
-    constructor(private app: App) { }
+    constructor(
+        private app: App,
+        private getSettings: () => MindNoteSettings
+    ) { }
 
     // ============================================================================
     // Atomic Operations
@@ -191,6 +196,9 @@ export class FileSystemManager {
         let candidate = sanitized;
         let counter = 1;
 
+        const settings = this.getSettings();
+        const caseSensitive = settings.caseSensitiveFilenames;
+
         while (true) {
             const candidatePath = normalizePath(`${folderPath}/${candidate}.md`);
 
@@ -199,8 +207,33 @@ export class FileSystemManager {
                 break;
             }
 
-            if (!this.exists(candidatePath)) {
-                break;
+            if (caseSensitive) {
+                // Determine existence by direct path check
+                if (!this.exists(candidatePath)) {
+                    break;
+                }
+            } else {
+                // Case-insensitive check: 
+                // We must check if ANY file in the directory matches case-insensitively
+                const folder = this.app.vault.getAbstractFileByPath(normalizePath(folderPath));
+                let exists = false;
+
+                if (folder instanceof TFolder) {
+                    for (const child of folder.children) {
+                        if (child.name.toLowerCase() === `${candidate}.md`.toLowerCase()) {
+                            // If it's the ignored file, it's not a conflict
+                            if (ignoredPath && child.path === normalizePath(ignoredPath)) {
+                                continue;
+                            }
+                            exists = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!exists) {
+                    break;
+                }
             }
 
             candidate = `${sanitized}_${counter}`;
