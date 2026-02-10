@@ -28,6 +28,10 @@ export function useMindMapTree({
     const [editTrigger, setEditTrigger] = useState<{ id: string; ts: number } | null>(null);
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
 
+    // Track the last data we pushed via onMapDataChange to distinguish
+    // external changes from our own updates (prevents delete revert bug)
+    const lastPushedDataRef = useRef<MindNode>(mapData.nodeData);
+
     // Use a ref to always have current treeData in callbacks (avoids stale closure)
     const treeDataRef = useRef<MindNode>(treeData);
 
@@ -36,23 +40,14 @@ export function useMindMapTree({
         treeDataRef.current = treeData;
     }, [treeData]);
 
-    // Update tree when mapData prop changes
+    // Update tree when mapData prop changes externally
     useEffect(() => {
-        const countNodes = (node: MindNode): number => {
-            let count = 1;
-            for (const child of node.children || []) {
-                count += countNodes(child);
-            }
-            return count;
-        };
-
-        const mapNodeCount = countNodes(mapData.nodeData);
-        const treeNodeCount = countNodes(treeData);
-
-        if (mapData.nodeData.id !== treeData.id || mapNodeCount > treeNodeCount) {
+        // Only sync when mapData was changed externally (not by our own push)
+        if (mapData.nodeData !== lastPushedDataRef.current) {
             setTreeData(mapData.nodeData);
+            lastPushedDataRef.current = mapData.nodeData;
         }
-    }, [mapData, treeData]);
+    }, [mapData]);
 
     // Generate unique ID
     const generateId = useCallback(() => {
@@ -63,6 +58,7 @@ export function useMindMapTree({
     const handleToggleExpand = useCallback((nodeId: string) => {
         setTreeData(prev => {
             const newTree = toggleNodeExpanded(prev, nodeId);
+            lastPushedDataRef.current = newTree;
             onMapDataChange?.({ nodeData: newTree });
             return newTree;
         });
@@ -74,6 +70,7 @@ export function useMindMapTree({
             const oldNode = findNodeInTree(prev, nodeId);
             if (oldNode && oldNode.topic !== newTopic) {
                 const newTree = updateNodeTopic(prev, nodeId, newTopic);
+                lastPushedDataRef.current = newTree;
                 onMapDataChange?.({ nodeData: newTree });
 
                 const newNode = findNodeInTree(newTree, nodeId);
@@ -104,6 +101,7 @@ export function useMindMapTree({
 
         const newTree = addSiblingNode(currentTree, targetId, newNode, direction);
         setTreeData(newTree);
+        lastPushedDataRef.current = newTree;
         onMapDataChange?.({ nodeData: newTree });
 
         setSelectedNodeIds(new Set([newNode.id]));
@@ -131,6 +129,7 @@ export function useMindMapTree({
 
         const newTree = addChildNode(currentTree, parentId, newNode);
         setTreeData(newTree);
+        lastPushedDataRef.current = newTree;
         onMapDataChange?.({ nodeData: newTree });
         onNodeCreate?.(newNode, parentId);
 
@@ -162,6 +161,7 @@ export function useMindMapTree({
 
         if (newTree !== currentTree) {
             setTreeData(newTree);
+            lastPushedDataRef.current = newTree;
             onMapDataChange?.({ nodeData: newTree });
             deletedNodes.forEach(n => onNodeDelete?.(n));
             setSelectedNodeIds(new Set());

@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import type MindNotePlugin from '../main';
 import { VIEW_TYPE_MINDNOTE, MindMapData, MindNode, MAP_FILE_NAME, FILE_EXTENSION_MN } from '../types';
 import { FileSystemManager, TransactionManager, StateSynchronizer } from '../core';
-import { MindMapFlow, type MindMapFlowProps } from './components';
+import { MindMapFlow, type MindMapFlowProps, findNodeInTree, addChildNode } from './components';
 
 export class MindNoteView extends ItemView {
     plugin: MindNotePlugin;
@@ -256,20 +256,12 @@ export class MindNoteView extends ItemView {
             try {
                 // Determine parent node
                 const mapData = this.synchronizer.getMapData();
-                let parentNode: MindNode = mapData.nodeData;
+                let parentNodeId = mapData.nodeData.id;
 
                 if (targetNodeId) {
-                    const findNode = (node: MindNode, id: string): MindNode | null => {
-                        if (node.id === id) return node;
-                        for (const child of node.children || []) {
-                            const found = findNode(child, id);
-                            if (found) return found;
-                        }
-                        return null;
-                    };
-                    const found = findNode(mapData.nodeData, targetNodeId);
+                    const found = findNodeInTree(mapData.nodeData, targetNodeId);
                     if (found) {
-                        parentNode = found;
+                        parentNodeId = found.id;
                     }
                 }
 
@@ -298,11 +290,11 @@ export class MindNoteView extends ItemView {
                     };
                 }
 
-                // Add to tree
-                parentNode.children = [...(parentNode.children || []), newNode];
+                // Add to tree using layoutUtils helper
+                const newTree = addChildNode(mapData.nodeData, parentNodeId, newNode);
 
                 // Save
-                await this.handleMapDataChange({ nodeData: mapData.nodeData });
+                await this.handleMapDataChange({ nodeData: newTree });
 
                 // Trigger creation hooks
                 if (!newNode.isImage) {

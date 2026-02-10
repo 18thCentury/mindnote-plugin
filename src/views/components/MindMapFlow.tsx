@@ -226,8 +226,27 @@ function MindMapFlowInner({
         setSelectedNodeIds(new Set());
     }, [setSelectedNodeIds]);
 
+    const handleDragOver = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+    }, []);
+
+    const handleDrop = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+            // TODO: Better target detection using elementFromPoint if needed
+            // For now, dropping on the canvas defaults to no target (root or context sensitive)
+            onDrop?.(event.dataTransfer.files, null);
+        }
+    }, [onDrop]);
+
     return (
-        <div style={{ width: '100%', height: '100%' }} ref={containerRef}>
+        <div
+            style={{ width: '100%', height: '100%' }}
+            ref={containerRef}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+        >
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
