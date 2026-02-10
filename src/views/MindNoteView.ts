@@ -195,6 +195,7 @@ export class MindNoteView extends ItemView {
             onNodeRename: this.handleNodeRename.bind(this),
             onMapDataChange: this.handleMapDataChange.bind(this),
             onDrop: this.handleDrop.bind(this),
+            onPaste: this.handlePaste.bind(this),
             resolveImageUrl: this.resolveImageUrl.bind(this),
         };
 
@@ -245,20 +246,18 @@ export class MindNoteView extends ItemView {
         await this.synchronizer.saveMapState();
     }
 
+
+
     /**
-     * Handle file drop - add dropped files as children of target node
+     * Common logic to import files (images/text) as nodes
      */
-    private async handleDrop(files: FileList, targetNodeId: string | null): Promise<void> {
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
+    private async importFiles(files: File[], targetNodeId: string | null): Promise<void> {
+        for (const file of files) {
             try {
-                const relativePath = await this.synchronizer.importImage(file);
-
-                // Get current map data
+                // Determine parent node
                 const mapData = this.synchronizer.getMapData();
-
-                // Find the target parent node (use targetNodeId if provided, otherwise root)
                 let parentNode: MindNode = mapData.nodeData;
+
                 if (targetNodeId) {
                     const findNode = (node: MindNode, id: string): MindNode | null => {
                         if (node.id === id) return node;
@@ -277,6 +276,7 @@ export class MindNoteView extends ItemView {
                 let newNode: MindNode;
 
                 if (file.type.startsWith('image/')) {
+                    const relativePath = await this.synchronizer.importImage(file);
                     newNode = {
                         id: crypto.randomUUID(),
                         topic: file.name,
@@ -287,6 +287,8 @@ export class MindNoteView extends ItemView {
                         imageUrl: relativePath,
                     };
                 } else {
+                    // For non-image files, maybe create a link or text node? 
+                    // Current behavior creates a node with filename.
                     newNode = {
                         id: crypto.randomUUID(),
                         topic: file.name,
@@ -296,32 +298,42 @@ export class MindNoteView extends ItemView {
                     };
                 }
 
-                // Actually add the node to the tree structure
+                // Add to tree
                 parentNode.children = [...(parentNode.children || []), newNode];
 
-                // Save the updated tree structure
+                // Save
                 await this.handleMapDataChange({ nodeData: mapData.nodeData });
 
-                // Trigger file creation for non-image nodes
+                // Trigger creation hooks
                 if (!newNode.isImage) {
                     this.synchronizer.onNodeCreated(newNode);
                 }
 
-                // Re-render with updated data
+                // Render
                 const updatedData = this.synchronizer.getDisplayMapData();
                 await this.updateContentMap(updatedData.nodeData);
-
-                if (this.containerEl_) {
-                    const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
-                    if (mapContainer) {
-                        this.renderReactFlow(mapContainer, updatedData);
-                    }
-                }
+                this.rerenderMindMap();
 
                 new Notice(`Imported: ${file.name}`);
             } catch (error) {
                 new Notice(`Failed to import file: ${error}`);
+                console.error(error);
             }
         }
+    }
+
+    /**
+     * Handle file drop - add dropped files as children of target node
+     */
+    private async handleDrop(fileList: FileList, targetNodeId: string | null): Promise<void> {
+        const files = Array.from(fileList);
+        await this.importFiles(files, targetNodeId);
+    }
+
+    /**
+     * Handle paste - add pasted files as children of target node
+     */
+    private async handlePaste(files: File[], targetNodeId: string | null): Promise<void> {
+        await this.importFiles(files, targetNodeId);
     }
 }

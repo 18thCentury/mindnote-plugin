@@ -18,6 +18,7 @@ import {
     ReactFlowProvider,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { Notice } from 'obsidian';
 
 import { MindMapNode } from './MindMapNode';
 import {
@@ -58,6 +59,7 @@ export interface MindMapFlowProps {
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
     onMapDataChange?: (data: MindMapData) => void;
     onDrop?: (files: FileList, targetNodeId: string | null) => void;
+    onPaste?: (files: File[], targetNodeId: string | null) => void;
     resolveImageUrl?: (relativePath: string) => string;
 }
 
@@ -71,6 +73,7 @@ function MindMapFlowInner({
     onNodeRename,
     onMapDataChange,
     onDrop,
+    onPaste,
     resolveImageUrl,
 }: MindMapFlowProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
@@ -506,8 +509,8 @@ function MindMapFlowInner({
         };
     }, [generateId]);
 
-    // Copy node
-    const copyNode = useCallback(() => {
+    // Copy node to system clipboard
+    const copyNode = useCallback(async () => {
         if (selectedNodeIds.size === 0) return;
         const currentTree = treeDataRef.current;
         const nodes: MindNode[] = [];
@@ -517,13 +520,94 @@ function MindMapFlowInner({
         });
 
         if (nodes.length > 0) {
-            setCopiedNodes(nodes);
-            setCutNodeIds(new Set());
+            // 1. Prepare Data
+            // Custom Type: Raw JSON source of truth
+            const customData = { nodes };
+            const jsonString = JSON.stringify(customData);
+
+            // Plain Text: Indented list for external apps
+            const generateText = (nodeList: MindNode[], depth = 0): string => {
+                return nodeList.map(node => {
+                    const indent = '\t'.repeat(depth);
+                    const childrenText = node.children ? '\n' + generateText(node.children, depth + 1) : '';
+                    return `${indent}${node.topic}${childrenText}`;
+                }).join('\n');
+            };
+            const plainText = generateText(nodes);
+
+            // HTML: Semantic structure + embedded data for rich paste targets (e.g. Word)
+            // We embed the JSON in a data attribute for robust parsing if custom type fails
+            const generateHtml = (nodeList: MindNode[]): string => {
+                const listItems = nodeList.map(node => {
+                    const childrenHtml = node.children && node.children.length > 0
+                        ? `<ul>${generateHtml(node.children)}</ul>`
+                        : '';
+                    return `<li>${escapeHtml(node.topic)}${childrenHtml}</li>`;
+                }).join('');
+                return listItems;
+            };
+            // Utility to escape HTML characters
+            const escapeHtml = (unsafe: string) => {
+                return unsafe
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/"/g, "&quot;")
+                    .replace(/'/g, "&#039;");
+            };
+            // Utility to escape attribute values (specifically quotes)
+            const escapeAttr = (unsafe: string) => {
+                return unsafe.replace(/"/g, '&quot;');
+            };
+
+            const htmlContent = `<div data-mindnote-json="${escapeAttr(jsonString)}">
+                <ul>${generateHtml(nodes)}</ul>
+            </div>`;
+
+            try {
+                // 2. Write to Clipboard
+                // Attempt 1: All types including custom
+                try {
+                    const clipboardItem = new ClipboardItem({
+                        'web mindnote/node': new Blob([jsonString], { type: 'application/json' }),
+                        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+                        'text/html': new Blob([htmlContent], { type: 'text/html' }),
+                    });
+                    await navigator.clipboard.write([clipboardItem]);
+                } catch (customError) {
+                    console.warn('Clipboard write with custom type failed, falling back to standard types', customError);
+
+                    // Attempt 2: Standard types only (HTML + Text)
+                    try {
+                        const fallbackItem = new ClipboardItem({
+                            'text/plain': new Blob([plainText], { type: 'text/plain' }),
+                            'text/html': new Blob([htmlContent], { type: 'text/html' }),
+                        });
+                        await navigator.clipboard.write([fallbackItem]);
+                    } catch (standardError) {
+                        console.warn('Clipboard write with HTML failed, falling back to text only', standardError);
+
+                        // Attempt 3: Text only
+                        await navigator.clipboard.writeText(plainText);
+                    }
+                }
+
+                // Fallback / Side effect: Set internal state for "Cut" operation tracking
+                setCopiedNodes(nodes);
+                setCutNodeIds(new Set()); // Clear cut on fresh copy
+                new Notice(`Copied ${nodes.length} node(s)`);
+
+            } catch (err) {
+                console.error('Failed to copy to clipboard:', err);
+                new Notice('Failed to copy to system clipboard');
+                // Fallback to internal state only
+                setCopiedNodes(nodes);
+            }
         }
     }, [selectedNodeIds]);
 
     // Cut node
-    const cutNode = useCallback(() => {
+    const cutNode = useCallback(async () => {
         const currentTree = treeDataRef.current;
         const nodes: MindNode[] = [];
         const cutIds = new Set<string>();
@@ -538,41 +622,135 @@ function MindMapFlowInner({
         });
 
         if (nodes.length > 0) {
+            // Write to system clipboard first
+            await copyNode();
+
+            // Then set cut state (overriding copyNode's clear)
             setCopiedNodes(nodes);
             setCutNodeIds(cutIds);
         }
-    }, [selectedNodeIds]);
+    }, [selectedNodeIds, copyNode]);
 
-    // Paste node
-    const pasteNode = useCallback(() => {
-        if (copiedNodes.length === 0) return;
-        const currentTree = treeDataRef.current;
-        // Paste into the last selected node or root
-        const targetId = selectedNodeIds.size > 0
-            ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1]
-            : currentTree.id;
+    // Paste node from system clipboard
+    const pasteNode = useCallback(async () => {
+        try {
+            const clipboardItems = await navigator.clipboard.read();
+            const currentTree = treeDataRef.current;
 
-        let newTree = currentTree;
+            // Target for paste: Selected node or Root
+            const targetId = selectedNodeIds.size > 0
+                ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1]
+                : currentTree.id;
 
-        copiedNodes.forEach(copiedNode => {
-            // Clone the copied node with new IDs
-            const newNode = cloneNode(copiedNode);
-            newTree = addChildNode(newTree, targetId, newNode);
-            onNodeCreate?.(newNode, targetId);
-        });
+            for (const item of clipboardItems) {
+                // 1. Check for Custom MindNote Type (Highest Priority)
+                if (item.types.includes('web mindnote/node')) {
+                    const blob = await item.getType('web mindnote/node');
+                    const text = await blob.text();
+                    try {
+                        const data = JSON.parse(text);
+                        if (data && Array.isArray(data.nodes)) {
+                            const nodesToPaste: MindNode[] = data.nodes;
+                            let newTree = currentTree;
+                            nodesToPaste.forEach(copiedNode => {
+                                // Clone with new IDs
+                                const newNode = cloneNode(copiedNode); // This recursively generates new IDs
+                                newTree = addChildNode(newTree, targetId, newNode);
+                                onNodeCreate?.(newNode, targetId);
+                            });
+                            // Handle Cut operation cleanup (if strictly internal)
+                            // Note: With system clipboard, "Cut" is trickier to track "after paste" across apps.
+                            // We heavily rely on internal state 'cutNodeIds' for the *current session* cut.
+                            if (cutNodeIds.size > 0) {
+                                // Check if we are pasting the *same* nodes that were cut?
+                                // Simplified: If we have cut nodes pending, and we just pasted *any* node,
+                                // we assume the cut operation is completing? 
+                                // Better: Only clear cut if we can verify identity, but JSON serialization loses identity equality.
+                                // Logic: If cutNodeIds exist, remove them.
+                                cutNodeIds.forEach(cutId => {
+                                    const updated = removeNode(newTree, cutId);
+                                    if (updated) newTree = updated;
+                                });
+                                setCutNodeIds(new Set());
+                            }
 
-        // If it was a cut, remove originals
-        if (cutNodeIds.size > 0) {
-            cutNodeIds.forEach(cutId => {
-                const updated = removeNode(newTree, cutId);
-                if (updated) newTree = updated;
-            });
-            setCutNodeIds(new Set());
+                            setTreeData(newTree);
+                            onMapDataChange?.({ nodeData: newTree });
+                            return; // Success, stop processing this item
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse MindNote clipboard data', e);
+                    }
+                }
+
+                // 2. Check for Images
+                // Find any image type
+                const imageType = item.types.find(type => type.startsWith('image/'));
+                if (imageType) {
+                    const blob = await item.getType(imageType);
+                    // Convert Blob to File
+                    const file = new File([blob], "pasted-image.png", { type: imageType });
+                    onPaste?.([file], targetId);
+                    return;
+                }
+
+                // 3. Fallback: Check for HTML (maybe from Word or another MindNote instance without custom types)
+                if (item.types.includes('text/html')) {
+                    const blob = await item.getType('text/html');
+                    const text = await blob.text();
+
+                    // Parse HTML to look for our embedded data attribute
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(text, 'text/html');
+                    const wrapper = doc.querySelector('[data-mindnote-json]');
+                    if (wrapper) {
+                        const jsonAttr = wrapper.getAttribute('data-mindnote-json');
+                        if (jsonAttr) {
+                            try {
+                                const data = JSON.parse(jsonAttr);
+                                if (data && Array.isArray(data.nodes)) {
+                                    // Found embedded MindNode data!
+                                    const nodesToPaste: MindNode[] = data.nodes;
+                                    let newTree = currentTree;
+                                    nodesToPaste.forEach(copiedNode => {
+                                        const newNode = cloneNode(copiedNode);
+                                        newTree = addChildNode(newTree, targetId, newNode);
+                                        onNodeCreate?.(newNode, targetId);
+                                    });
+                                    setTreeData(newTree);
+                                    onMapDataChange?.({ nodeData: newTree });
+                                    return;
+                                }
+                            } catch (e) { console.error("Found data attribute but failed to parse", e); }
+                        }
+                    }
+                }
+
+                // 4. Fallback: Plain Text
+                if (item.types.includes('text/plain')) {
+                    const blob = await item.getType('text/plain');
+                    const text = await blob.text();
+                    if (text && text.trim().length > 0) {
+                        // Create a single node with the text
+                        // Future improvement: Parse indentation to create hierarchy
+                        const newNode: MindNode = {
+                            id: generateId(),
+                            topic: text.trim(), // Consider truncating if very long
+                            filepath: '',
+                            children: [],
+                            expanded: true
+                        };
+                        let newTree = addChildNode(currentTree, targetId, newNode);
+                        setTreeData(newTree);
+                        onMapDataChange?.({ nodeData: newTree });
+                        onNodeCreate?.(newNode, targetId);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Failed to paste from clipboard:', err);
         }
-
-        setTreeData(newTree);
-        onMapDataChange?.({ nodeData: newTree });
-    }, [copiedNodes, cutNodeIds, selectedNodeIds, cloneNode, onMapDataChange, onNodeCreate]);
+    }, [selectedNodeIds, cutNodeIds, onMapDataChange, onNodeCreate, generateId, cloneNode, onPaste]);
 
     // Keyboard shortcuts
     useEffect(() => {
