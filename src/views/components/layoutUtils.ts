@@ -144,6 +144,7 @@ export function convertToFlowElements(
         onToggleExpand?: (nodeId: string) => void;
         onNodeRename?: (nodeId: string, newTopic: string) => void;
         editTrigger?: { id: string; ts: number } | null;
+        resolveImageUrl?: (relativePath: string) => string;
     }
 ): { nodes: Node<MindMapNodeData>[]; edges: Edge[] } {
     const opts = { ...DEFAULT_OPTIONS, ...options };
@@ -154,6 +155,15 @@ export function convertToFlowElements(
         const hasChildren = node.children && node.children.length > 0;
         const hasContent = contentMap.get(node.id) ?? false;
 
+        let imageUrl = node.imageUrl;
+        if (node.isImage && node.imageUrl && callbacks?.resolveImageUrl) {
+            try {
+                imageUrl = callbacks.resolveImageUrl(node.imageUrl);
+            } catch (e) {
+                console.error('Failed to resolve image URL:', e);
+            }
+        }
+
         nodes.push({
             id: node.id,
             type: 'mindMapNode',
@@ -163,7 +173,7 @@ export function convertToFlowElements(
                 topic: node.topic,
                 filepath: node.filepath,
                 isImage: node.isImage,
-                imageUrl: node.imageUrl,
+                imageUrl: imageUrl,
                 hasContent,
                 expanded: node.expanded !== false,
                 hasChildren,
