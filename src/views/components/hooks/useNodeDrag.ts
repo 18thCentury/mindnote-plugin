@@ -1,11 +1,11 @@
 import { useState, useCallback } from 'react';
 import type { NodeMouseHandler, OnNodeDrag } from '@xyflow/react';
+import { findParentNode } from '../treeOperations';
 import {
-    findParentNode,
     moveNodeAsChild,
     moveNodeAsSiblingAbove,
     moveNodeAsSiblingBelow,
-} from '../layoutUtils';
+} from '../treeMovement';
 import type { MindNode, MindMapData } from '../../../types';
 
 export interface UseNodeDragProps {

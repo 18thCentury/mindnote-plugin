@@ -4,7 +4,7 @@
  */
 import { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import type { MindMapNodeData } from './layoutUtils';
+import type { MindMapNodeData } from './flowTypes';
 
 function MindMapNodeComponent(props: NodeProps) {
     const { id, data, selected, style } = props as any;

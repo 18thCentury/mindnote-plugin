@@ -1,16 +1,16 @@
 /**
- * Tests for layoutUtils
+ * Tests for tree operations and layout engine
  */
 import { describe, it, expect } from 'vitest';
 import {
-    convertToFlowElements,
     findNodeInTree,
     toggleNodeExpanded,
     addChildNode,
     removeNode,
     updateNodeTopic,
     addSiblingNode,
-} from '../../../src/views/components/layoutUtils';
+} from '../../../src/views/components/treeOperations';
+import { convertToFlowElements } from '../../../src/views/components/layoutEngine';
 import type { MindNode } from '../../../src/types';
 
 // Sample tree for testing

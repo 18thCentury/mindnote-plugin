@@ -6,7 +6,7 @@ import {
     updateNodeTopic,
     findNodeInTree,
     toggleNodeExpanded,
-} from '../layoutUtils';
+} from '../treeOperations';
 import type { MindNode, MindMapData } from '../../../types';
 
 export interface UseMindMapTreeProps {

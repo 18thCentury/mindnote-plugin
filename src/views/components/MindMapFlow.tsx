@@ -19,12 +19,9 @@ import {
 import '@xyflow/react/dist/style.css';
 
 import { MindMapNode } from './MindMapNode';
-import {
-    convertToFlowElements,
-    findNodeInTree,
-    type MindMapNodeData,
-    type LayoutOptions,
-} from './layoutUtils';
+import { convertToFlowElements } from './layoutEngine';
+import { findNodeInTree } from './treeOperations';
+import type { MindMapNodeData, LayoutOptions } from './flowTypes';
 import type { MindNode, MindMapData, Direction } from '../../types';
 
 import { useMindMapTree } from './hooks/useMindMapTree';
