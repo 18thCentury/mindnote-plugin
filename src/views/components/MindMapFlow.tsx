@@ -2,7 +2,7 @@
  * MindMapFlow - Main React Flow component for the mindmap
  * Handles rendering, interactions, and clipboard operations
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ReactFlow,
     Background,
@@ -15,6 +15,7 @@ import {
     type Edge,
     type NodeMouseHandler,
     SelectionMode,
+    Panel,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -42,6 +43,7 @@ export interface MindMapFlowProps {
         verticalGap: number;
         theme: 'primary' | 'dark' | 'auto';
         lineWidth: number;
+        compact: boolean;
     };
     contentMap: Map<string, boolean>;
     onNodeSelect?: (node: MindNode) => void;
@@ -136,13 +138,22 @@ function MindMapFlowInner({
         handleToggleExpand,
     });
 
+    // Local compact state (allows in-view toggle, initialized from settings)
+    const [isCompact, setIsCompact] = useState(settings.compact);
+
+    // Sync local state when settings change externally
+    useEffect(() => {
+        setIsCompact(settings.compact);
+    }, [settings.compact]);
+
     // Layout options from settings
     const layoutOptions: Partial<LayoutOptions> = useMemo(() => ({
         direction: settings.direction,
         horizontalGap: settings.horizontalGap,
         verticalGap: settings.verticalGap,
         lineWidth: settings.lineWidth,
-    }), [settings]);
+        compact: isCompact,
+    }), [settings, isCompact]);
 
     // Convert tree to flow elements whenever tree changes
     useEffect(() => {
@@ -266,6 +277,16 @@ function MindMapFlowInner({
                 <Background />
                 <Controls />
                 <MiniMap />
+                <Panel position="top-right">
+                    <button
+                        className={`mindnote-compact-toggle ${isCompact ? 'active' : ''}`}
+                        onClick={() => setIsCompact(v => !v)}
+                        aria-label={isCompact ? 'Switch to normal layout' : 'Switch to compact layout'}
+                        title={isCompact ? 'Normal layout' : 'Compact layout'}
+                    >
+                        {isCompact ? '⊟' : '⊞'}
+                    </button>
+                </Panel>
             </ReactFlow>
         </div>
     );

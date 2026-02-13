@@ -187,6 +187,7 @@ export class MindNoteView extends ItemView {
                 verticalGap: settings.verticalGap,
                 theme: settings.theme,
                 lineWidth: settings.lineWidth,
+                compact: settings.compact,
             },
             contentMap: this.contentMap,
             onNodeSelect: this.handleNodeSelect.bind(this),

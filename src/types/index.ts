@@ -46,6 +46,7 @@ export interface MindNoteSettings {
     rootRadius: number;         // --root-radius
     lineWidth: number;          // stroke-width
     caseSensitiveFilenames: boolean;
+    compact: boolean;           // compact layout mode
 }
 
 export const DEFAULT_SETTINGS: MindNoteSettings = {
@@ -60,6 +61,7 @@ export const DEFAULT_SETTINGS: MindNoteSettings = {
     rootRadius: 3,
     lineWidth: 1,
     caseSensitiveFilenames: false,
+    compact: false,
 };
 
 // ============================================================================

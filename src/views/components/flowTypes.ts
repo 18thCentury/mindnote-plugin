@@ -13,6 +13,7 @@ export interface LayoutOptions {
     fontSize?: number;
     fontFamily?: string;
     lineWidth: number;
+    compact?: boolean;
 }
 
 // Add index signature to satisfy React Flow's Record<string, unknown> requirement
@@ -44,4 +45,5 @@ export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
     fontSize: 14,
     fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     lineWidth: 1,
+    compact: false,
 };

@@ -64,6 +64,18 @@ export class MindNoteSettingTab extends PluginSettingTab {
                     })
             );
 
+        new Setting(containerEl)
+            .setName('Compact layout')
+            .setDesc('Reduce spacing between nodes for a denser view')
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.compact)
+                    .onChange(async (value) => {
+                        this.plugin.settings.compact = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
         // Spacing section
         new Setting(containerEl).setName('Spacing').setHeading();
 
