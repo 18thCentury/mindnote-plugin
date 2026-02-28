@@ -382,6 +382,62 @@ describe('layoutUtils', () => {
             expect(compactGap).toBeLessThan(normalGap);
         });
 
+
+        it('should compact nested sub-branches recursively in compact mode', () => {
+            // root -> A(A1[A11,A12],A2) and B(B1[long branch],B2)
+            // Recursive compact should reduce total span compared with normal mode,
+            // not only at top-level siblings but also in depth-2 sibling groups.
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'A', topic: 'A', filepath: 'a.md',
+                        children: [
+                            {
+                                id: 'A1', topic: 'A1', filepath: 'a1.md',
+                                children: [
+                                    { id: 'A11', topic: 'A11', filepath: 'a11.md', children: [], expanded: true },
+                                    { id: 'A12', topic: 'A12', filepath: 'a12.md', children: [], expanded: true },
+                                ],
+                                expanded: true,
+                            },
+                            { id: 'A2', topic: 'A2', filepath: 'a2.md', children: [], expanded: true },
+                        ],
+                        expanded: true,
+                    },
+                    {
+                        id: 'B', topic: 'B', filepath: 'b.md',
+                        children: [
+                            {
+                                id: 'B1', topic: 'B1', filepath: 'b1.md',
+                                children: [
+                                    { id: 'B11', topic: 'B11', filepath: 'b11.md', children: [], expanded: true },
+                                    { id: 'B12', topic: 'B12', filepath: 'b12.md', children: [], expanded: true },
+                                    { id: 'B13', topic: 'B13', filepath: 'b13.md', children: [], expanded: true },
+                                ],
+                                expanded: true,
+                            },
+                            { id: 'B2', topic: 'B2', filepath: 'b2.md', children: [], expanded: true },
+                        ],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const normalResult = convertToFlowElements(tree);
+            const compactResult = convertToFlowElements(tree, { compact: true });
+
+            const getSpan = (nodes: typeof normalResult.nodes) => {
+                const ys = nodes.map(n => n.position.y);
+                return Math.max(...ys) - Math.min(...ys);
+            };
+
+            expect(getSpan(compactResult.nodes)).toBeLessThan(getSpan(normalResult.nodes));
+        });
+
         it('should produce shorter total height for asymmetric trees in compact mode', () => {
             // One deep branch + one shallow branch
             const tree: MindNode = {

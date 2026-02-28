@@ -173,16 +173,20 @@ export function convertToFlowElements(
 }
 
 /**
- * Branch contour: tracks the top and bottom y extents at each horizontal
- * offset from the branch root. Used for compact layout to pack sibling
- * branches tightly by comparing their shapes.
- * 
- * Key: horizontal offset (0 = branch root column, 1 = first child column, etc.)
- * Value: min/max y at that column, relative to the branch root's center y
+ * Irregular branch contour represented as orthogonal polygon strips.
+ * Each segment covers [xStart, xEnd) with top/bottom bounds in subtree-root
+ * relative coordinates. This allows compacting by real occupied area instead
+ * of rectangular subtree bounds.
  */
+interface ContourSegment {
+    xStart: number;
+    xEnd: number;
+    top: number;
+    bottom: number;
+}
+
 interface BranchContour {
-    top: Map<number, number>;    // hOffset → minimum relative y
-    bottom: Map<number, number>; // hOffset → maximum relative y
+    segments: ContourSegment[];
 }
 
 /**
@@ -192,60 +196,116 @@ interface BranchContour {
 interface CompactSubtreeResult {
     /** Relative positions of each node in this subtree (relative to subtree root center) */
     relPositions: Map<string, { dx: number, dy: number }>;
-    /** Branch contour describing the shape of this subtree */
+    /** Branch contour describing the irregular occupied region of this subtree */
     contour: BranchContour;
-    /** Total height of this subtree (for centering the root) */
-    height: number;
+}
+
+function getContourBandAt(contour: BranchContour, x: number): { top: number, bottom: number } | null {
+    for (const seg of contour.segments) {
+        if (x >= seg.xStart && x < seg.xEnd) {
+            return { top: seg.top, bottom: seg.bottom };
+        }
+    }
+    return null;
+}
+
+function getContourMin(contour: BranchContour): number {
+    return Math.min(...contour.segments.map(seg => seg.top));
+}
+
+function getContourMax(contour: BranchContour): number {
+    return Math.max(...contour.segments.map(seg => seg.bottom));
+}
+
+function shiftContour(contour: BranchContour, dx: number, dy: number): BranchContour {
+    return {
+        segments: contour.segments.map(seg => ({
+            xStart: seg.xStart + dx,
+            xEnd: seg.xEnd + dx,
+            top: seg.top + dy,
+            bottom: seg.bottom + dy,
+        })),
+    };
 }
 
 /**
  * Compute how far down a lower branch must be shifted so that
- * it doesn't overlap with the upper branch at any shared horizontal offset.
- * Returns the minimum vertical distance between the two branches' centers.
+ * it doesn't overlap with the upper branch across every shared horizontal band.
  */
 function computeMinShift(
     upperContour: BranchContour,
     lowerContour: BranchContour,
     minGap: number
 ): number {
+    const boundaries = new Set<number>();
+    for (const seg of upperContour.segments) {
+        boundaries.add(seg.xStart);
+        boundaries.add(seg.xEnd);
+    }
+    for (const seg of lowerContour.segments) {
+        boundaries.add(seg.xStart);
+        boundaries.add(seg.xEnd);
+    }
+
+    const sorted = [...boundaries].sort((a, b) => a - b);
     let maxShift = 0;
 
-    // Check every horizontal offset that exists in both contours
-    for (const [hOffset, upperBottom] of upperContour.bottom) {
-        const lowerTop = lowerContour.top.get(hOffset);
-        if (lowerTop !== undefined) {
-            // At this horizontal offset, we need: upperBottom + gap <= lowerTop + shift
-            // shift >= upperBottom - lowerTop + gap
-            const needed = upperBottom - lowerTop + minGap;
-            maxShift = Math.max(maxShift, needed);
-        }
+    for (let i = 0; i < sorted.length - 1; i++) {
+        const xStart = sorted[i];
+        const xEnd = sorted[i + 1];
+        if (xEnd <= xStart) continue;
+        const xMid = (xStart + xEnd) / 2;
+
+        const upperBand = getContourBandAt(upperContour, xMid);
+        const lowerBand = getContourBandAt(lowerContour, xMid);
+        if (!upperBand || !lowerBand) continue;
+
+        const needed = upperBand.bottom - lowerBand.top + minGap;
+        maxShift = Math.max(maxShift, needed);
     }
 
     return maxShift;
 }
 
 /**
- * Merge two contours, where the second contour is shifted vertically by `offset`.
+ * Merge two contours. The second contour is pre-shifted by caller when needed.
  */
-function mergeContours(a: BranchContour, b: BranchContour, bOffset: number): BranchContour {
-    const merged: BranchContour = {
-        top: new Map(a.top),
-        bottom: new Map(a.bottom),
-    };
-
-    for (const [hOffset, val] of b.top) {
-        const shifted = val + bOffset;
-        const existing = merged.top.get(hOffset);
-        merged.top.set(hOffset, existing !== undefined ? Math.min(existing, shifted) : shifted);
+function mergeContours(a: BranchContour, b: BranchContour): BranchContour {
+    const boundaries = new Set<number>();
+    for (const seg of a.segments) {
+        boundaries.add(seg.xStart);
+        boundaries.add(seg.xEnd);
+    }
+    for (const seg of b.segments) {
+        boundaries.add(seg.xStart);
+        boundaries.add(seg.xEnd);
     }
 
-    for (const [hOffset, val] of b.bottom) {
-        const shifted = val + bOffset;
-        const existing = merged.bottom.get(hOffset);
-        merged.bottom.set(hOffset, existing !== undefined ? Math.max(existing, shifted) : shifted);
+    const sorted = [...boundaries].sort((x, y) => x - y);
+    const merged: ContourSegment[] = [];
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+        const xStart = sorted[i];
+        const xEnd = sorted[i + 1];
+        if (xEnd <= xStart) continue;
+
+        const xMid = (xStart + xEnd) / 2;
+        const aBand = getContourBandAt(a, xMid);
+        const bBand = getContourBandAt(b, xMid);
+        if (!aBand && !bBand) continue;
+
+        const top = aBand && bBand ? Math.min(aBand.top, bBand.top) : (aBand ?? bBand)!.top;
+        const bottom = aBand && bBand ? Math.max(aBand.bottom, bBand.bottom) : (aBand ?? bBand)!.bottom;
+
+        const prev = merged[merged.length - 1];
+        if (prev && prev.xEnd === xStart && prev.top === top && prev.bottom === bottom) {
+            prev.xEnd = xEnd;
+        } else {
+            merged.push({ xStart, xEnd, top, bottom });
+        }
     }
 
-    return merged;
+    return { segments: merged };
 }
 
 /**
@@ -257,8 +317,14 @@ function applyTreeLayout(
     options: LayoutOptions
 ): Node<MindMapNodeData>[] {
     const isCompact = !!options.compact;
-    const effectiveHGap = options.horizontalGap;//isCompact ? Math.round(options.horizontalGap * 0.8) : options.horizontalGap;
-    const effectiveVGap = options.verticalGap;//isCompact ? Math.round(options.verticalGap * 0.5) : options.verticalGap;
+    // Compact mode intentionally tightens both axes so branch contours can
+    // "interlock" more aggressively (similar to XMind compact layout).
+    const effectiveHGap = isCompact
+        ? Math.max(16, Math.round(options.horizontalGap * 0.65))
+        : options.horizontalGap;
+    const effectiveVGap = isCompact
+        ? Math.max(8, Math.round(options.verticalGap * 0.55))
+        : options.verticalGap;
 
     // 1. Build parent -> children map from edges
     const parentToChildren = new Map<string, string[]>();
@@ -292,93 +358,76 @@ function applyTreeLayout(
         // contours at shared horizontal offsets.
 
         /**
-         * Bottom-up: Layout a subtree and return its contour + relative positions.
-         * hOffset is the horizontal column index relative to the subtree being built
-         * by the caller (used to track contour positions correctly).
+         * Bottom-up recursive compact layout.
+         * Every subtree is packed recursively, and sibling subtrees are then
+         * compacted using irregular contour overlap checks.
          */
-        function layoutCompactSubtree(nodeId: string, hOffset: number): CompactSubtreeResult {
+        function layoutCompactSubtree(nodeId: string): CompactSubtreeResult {
             const dims = nodeDims.get(nodeId)!;
             const children = parentToChildren.get(nodeId) || [];
 
-            // Leaf node: contour is just this node's bounding box
+            // Contour starts with this node rectangle itself.
+            const selfContour: BranchContour = {
+                segments: [{
+                    xStart: 0,
+                    xEnd: dims.width,
+                    top: -dims.height / 2,
+                    bottom: dims.height / 2,
+                }],
+            };
+
             if (children.length === 0) {
-                const contour: BranchContour = {
-                    top: new Map([[hOffset, -dims.height / 2]]),
-                    bottom: new Map([[hOffset, dims.height / 2]]),
-                };
                 return {
                     relPositions: new Map([[nodeId, { dx: 0, dy: 0 }]]),
-                    contour,
-                    height: dims.height,
+                    contour: selfContour,
                 };
             }
 
-            // Recursively layout each child subtree
-            const childHOffset = hOffset + 1; // Children are one column to the right
             const childResults: CompactSubtreeResult[] = children.map(
-                childId => layoutCompactSubtree(childId, childHOffset)
+                childId => layoutCompactSubtree(childId)
             );
 
-            // Pack children using contour comparison
-            // childCenterYs[i] = center y of child i, relative to the first child's center
+            // First pack children in child-local coordinates (all child roots share x=0).
             const childCenterYs: number[] = [];
-            let mergedChildContour: BranchContour | null = null;
+            let packedChildrenContour: BranchContour | null = null;
 
             for (let i = 0; i < childResults.length; i++) {
                 if (i === 0) {
                     childCenterYs.push(0);
-                    mergedChildContour = childResults[0].contour;
+                    packedChildrenContour = childResults[0].contour;
                 } else {
-                    // Compute minimum shift so child i doesn't overlap with merged contour above
-                    const shift = computeMinShift(mergedChildContour!, childResults[i].contour, effectiveVGap);
+                    const shift = computeMinShift(packedChildrenContour!, childResults[i].contour, effectiveVGap);
                     childCenterYs.push(shift);
-                    // Merge this child's contour into the accumulated contour
-                    mergedChildContour = mergeContours(mergedChildContour!, childResults[i].contour, shift);
+                    packedChildrenContour = mergeContours(
+                        packedChildrenContour!,
+                        shiftContour(childResults[i].contour, 0, shift)
+                    );
                 }
             }
 
-            // Center the children block around y=0
-            // Find the bounding box of all children centers
-            const minChildY = Math.min(...childCenterYs);
-            const maxChildY = Math.max(...childCenterYs);
-            // Account for the actual extent of first and last child subtrees
-            const topExtent = minChildY + getContourMin(childResults[0].contour);
-            const bottomExtent = maxChildY + getContourMax(childResults[childResults.length - 1].contour);
-            const childrenBlockHeight = bottomExtent - topExtent;
-            const childrenBlockCenter = (topExtent + bottomExtent) / 2;
-
-            // Shift all children so the block is centered at y=0
+            // Recenter children around current node center.
+            const childrenTop = getContourMin(packedChildrenContour!);
+            const childrenBottom = getContourMax(packedChildrenContour!);
+            const childrenBlockCenter = (childrenTop + childrenBottom) / 2;
             for (let i = 0; i < childCenterYs.length; i++) {
                 childCenterYs[i] -= childrenBlockCenter;
             }
 
-            // Build the combined contour for this subtree
-            // Start with the current node's contour
-            const selfExtentH = dims.height / 2;
-            const totalHeight = Math.max(dims.height, childrenBlockHeight);
-
-            let subtreeContour: BranchContour = {
-                top: new Map([[hOffset, -selfExtentH]]),
-                bottom: new Map([[hOffset, selfExtentH]]),
-            };
-
-            // Merge all children contours with their final offsets
+            // Merge node and all compacted child contours into this subtree contour.
+            const childDx = dims.width + effectiveHGap;
+            let subtreeContour = selfContour;
             for (let i = 0; i < childResults.length; i++) {
-                subtreeContour = mergeContours(subtreeContour, childResults[i].contour, childCenterYs[i]);
+                subtreeContour = mergeContours(
+                    subtreeContour,
+                    shiftContour(childResults[i].contour, childDx, childCenterYs[i])
+                );
             }
 
-            // Collect all relative positions
             const relPositions = new Map<string, { dx: number, dy: number }>();
             relPositions.set(nodeId, { dx: 0, dy: 0 });
 
             for (let i = 0; i < children.length; i++) {
-                const childId = children[i];
-                const childDims = nodeDims.get(childId)!;
-                const childDx = dims.width + effectiveHGap;
                 const childDy = childCenterYs[i];
-
-                // Add child's own position
-                // And merge all descendant positions with offset
                 for (const [descId, descPos] of childResults[i].relPositions) {
                     relPositions.set(descId, {
                         dx: childDx + descPos.dx,
@@ -390,22 +439,7 @@ function applyTreeLayout(
             return {
                 relPositions,
                 contour: subtreeContour,
-                height: totalHeight,
             };
-        }
-
-        /** Get minimum y across all contour entries */
-        function getContourMin(contour: BranchContour): number {
-            let min = Infinity;
-            for (const v of contour.top.values()) min = Math.min(min, v);
-            return min;
-        }
-
-        /** Get maximum y across all contour entries */
-        function getContourMax(contour: BranchContour): number {
-            let max = -Infinity;
-            for (const v of contour.bottom.values()) max = Math.max(max, v);
-            return max;
         }
 
         /**
@@ -429,7 +463,7 @@ function applyTreeLayout(
         // Layout and position each root
         let currentRootY = 0;
         rootNodes.forEach((root) => {
-            const result = layoutCompactSubtree(root.id, 0);
+            const result = layoutCompactSubtree(root.id);
             const topExtent = getContourMin(result.contour);
             const bottomExtent = getContourMax(result.contour);
             const totalHeight = bottomExtent - topExtent;
