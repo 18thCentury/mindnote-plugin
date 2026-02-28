@@ -15,6 +15,7 @@ export class StateSynchronizer {
     private mapData: MindMapData | null = null;
     private writeQueue: WriteQueue;
     private fileEventUnsubscribe: (() => void) | null = null;
+    private onContentChangeCallback: ((nodeId: string, hasContent: boolean) => void) | null = null;
 
     constructor(
         private app: App,
@@ -385,7 +386,15 @@ export class StateSynchronizer {
     /**
      * Open the markdown file associated with a node
      */
+    private openFileRequestId = 0;
+
+    /**
+     * Open the markdown file associated with a node
+     */
     async openNodeMarkdown(node: MindNode, options: { active: boolean } = { active: true }): Promise<void> {
+        // Increment request ID to invalidate previous pending requests
+        const requestId = ++this.openFileRequestId;
+
         // Use authoritative node state to get filepath
         // The UI node might be stale (missing filepath after creation)
         let targetNode = node;
@@ -396,9 +405,23 @@ export class StateSynchronizer {
             }
         }
 
-        // If no filepath exists, create the markdown file now
-        if (!targetNode.filepath) {
+        // Optimization: Fast path if file already exists
+        // Check Obsidian cache directly (synchronous & fast)
+        let fileExists = false;
+        if (targetNode.filepath) {
+            const existingPath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
+            const existingFile = this.app.vault.getAbstractFileByPath(existingPath);
+            if (existingFile instanceof TFile) {
+                fileExists = true;
+            }
+        }
+
+        // If no filepath exists or file missing, create the markdown file now
+        if (!fileExists) {
             await this.ensureNodeHasMarkdown(targetNode);
+
+            // Check for cancellation after async op
+            if (this.openFileRequestId !== requestId) return;
         }
 
         // Still no filepath? Something went wrong
@@ -416,10 +439,16 @@ export class StateSynchronizer {
         const filePath = normalizePath(`${this.getMdFolderPath()}/${targetNode.filepath}`);
         let file = this.app.vault.getAbstractFileByPath(filePath);
 
-        // If file doesn't exist on disk, create it
+        // If file doesn't exist on disk (unlikely given check above, but possible race), create it
         if (!(file instanceof TFile)) {
             await this.fsm.ensureDirectory(this.getMdFolderPath());
+            // Check cancellation
+            if (this.openFileRequestId !== requestId) return;
+
             await this.fsm.createFile(filePath, '');
+            // Check cancellation
+            if (this.openFileRequestId !== requestId) return;
+
             file = this.app.vault.getAbstractFileByPath(filePath);
         }
 
@@ -441,7 +470,14 @@ export class StateSynchronizer {
             }
 
             if (leaf) {
+                // Request cancellation check one last time before UI update
+                if (this.openFileRequestId !== requestId) return;
+
                 await leaf.openFile(file, { active: options.active });
+
+                // Final check to ensure we don't update state if another request came in during openFile
+                if (this.openFileRequestId !== requestId) return;
+
                 this.currentOpenNode = targetNode;
                 this.currentLeaf = leaf;
             }
@@ -545,6 +581,13 @@ export class StateSynchronizer {
     // ============================================================================
 
     /**
+     * Set callback for content changes (used by view to update contentMap)
+     */
+    setOnContentChange(callback: (nodeId: string, hasContent: boolean) => void): void {
+        this.onContentChangeCallback = callback;
+    }
+
+    /**
      * Register file event listeners for external changes
      */
     private registerFileListeners(): void {
@@ -556,6 +599,13 @@ export class StateSynchronizer {
             500,
             true
         );
+
+        // Listen for file modifications
+        const modifyRef = this.app.vault.on('modify', (file) => {
+            if (file instanceof TFile && this.isInBundle(file.path)) {
+                handleFileChange(file);
+            }
+        });
 
         // Listen for file renames
         const renameRef = this.app.vault.on('rename', async (file, oldPath) => {
@@ -573,6 +623,7 @@ export class StateSynchronizer {
 
         // Cleanup function
         this.fileEventUnsubscribe = () => {
+            this.app.vault.offref(modifyRef);
             this.app.vault.offref(renameRef);
             this.app.vault.offref(deleteRef);
         };
@@ -586,10 +637,19 @@ export class StateSynchronizer {
     }
 
     /**
-     * Handle external file change
+     * Handle external file change - notify view of content changes
      */
-    private async onExternalFileChange(_file: TFile): Promise<void> {
-        // Could implement content sync if needed
+    private async onExternalFileChange(file: TFile): Promise<void> {
+        // Only process markdown files in the md folder
+        if (!this.mapData || !file.path.includes('/md/')) return;
+
+        const filename = file.name;
+        const node = this.findNodeByFilepath(this.mapData.nodeData, filename);
+        if (node && this.onContentChangeCallback) {
+            const content = await this.app.vault.read(file);
+            const hasContent = content.trim().length > 0;
+            this.onContentChangeCallback(node.id, hasContent);
+        }
     }
 
     /**

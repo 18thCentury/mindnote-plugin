@@ -14,7 +14,7 @@ export default class MindNotePlugin extends Plugin {
 
     async onload(): Promise<void> {
         await this.loadSettings();
-        this.fsm = new FileSystemManager(this.app);
+        this.fsm = new FileSystemManager(this.app, () => this.settings);
 
         // Handle file paste in MindNote markdown files
         this.registerEvent(
@@ -91,6 +91,13 @@ export default class MindNotePlugin extends Plugin {
 
     async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
+
+        // Refresh all MindNote views to reflect setting changes immediately
+        this.app.workspace.getLeavesOfType(VIEW_TYPE_MINDNOTE).forEach(leaf => {
+            if (leaf.view instanceof MindNoteView) {
+                leaf.view.rerenderMindMap();
+            }
+        });
     }
 
     /**

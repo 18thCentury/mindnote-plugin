@@ -4,7 +4,7 @@
  */
 import { memo, useState, useCallback, useRef, useEffect } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import type { MindMapNodeData } from './layoutUtils';
+import type { MindMapNodeData } from './flowTypes';
 
 function MindMapNodeComponent(props: NodeProps) {
     const { id, data, selected, style } = props as any;
@@ -17,10 +17,23 @@ function MindMapNodeComponent(props: NodeProps) {
 
     useEffect(() => {
         if (isEditing && inputRef.current) {
-            inputRef.current.focus();
-            inputRef.current.select();
+            // Use setTimeout to ensure focus happens after any potential 
+            // layout updates or other focus events (like from React Flow)
+            setTimeout(() => {
+                inputRef.current?.focus();
+                inputRef.current?.select();
+            }, 10);
         }
     }, [isEditing]);
+
+    const lastEditTsRef = useRef<number | undefined>(undefined);
+
+    useEffect(() => {
+        if (nodeData.startEditTs && nodeData.startEditTs !== lastEditTsRef.current) {
+            lastEditTsRef.current = nodeData.startEditTs;
+            setIsEditing(true);
+        }
+    }, [nodeData.startEditTs]);
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -39,8 +52,12 @@ function MindMapNodeComponent(props: NodeProps) {
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
+            e.preventDefault(); // Prevent duplicate newlines or form submit
+            e.nativeEvent.stopImmediatePropagation(); // Stop native bubbling to document
+            e.stopPropagation(); // Stop React bubbling
             handleBlur();
         } else if (e.key === 'Escape') {
+            e.stopPropagation();
             setEditValue(nodeData.topic);
             setIsEditing(false);
         }
@@ -51,7 +68,7 @@ function MindMapNodeComponent(props: NodeProps) {
         nodeData.onToggleExpand?.(id);
     }, [id, nodeData]);
 
-    const nodeClass = `mindmap-node ${nodeData.isRoot ? 'mindmap-node-root' : ''} ${selected ? 'mindmap-node-selected' : ''}`;
+    const nodeClass = `mindmap-node ${nodeData.isRoot ? 'mindmap-node-root' : ''} ${selected ? 'mindmap-node-selected' : ''} ${isEditing ? 'mindmap-node-editing' : ''} ${nodeData.isDragging ? 'mindmap-node-dragging' : ''} ${nodeData.dropZone === 'above' ? 'mindmap-drop-above' : ''} ${nodeData.dropZone === 'child' ? 'mindmap-drop-child' : ''} ${nodeData.dropZone === 'below' ? 'mindmap-drop-below' : ''}`.trim();
 
     return (
         <div className={nodeClass} style={style} onDoubleClick={handleDoubleClick}>
@@ -82,7 +99,7 @@ function MindMapNodeComponent(props: NodeProps) {
                         onChange={(e) => setEditValue(e.target.value)}
                         onBlur={handleBlur}
                         onKeyDown={handleKeyDown}
-                        className="mindmap-node-input"
+                        className="mindmap-node-input nodrag"
                     />
                 ) : nodeData.isImage && nodeData.imageUrl ? (
                     <img
@@ -103,7 +120,7 @@ function MindMapNodeComponent(props: NodeProps) {
                     onClick={handleToggleClick}
                     aria-label={nodeData.expanded ? 'Collapse' : 'Expand'}
                 >
-                    {nodeData.expanded ? '−' : '+'}
+                    {nodeData.expanded ? '-' : '+'}
                 </button>
             )}
 

@@ -2,7 +2,7 @@
  * MindMapFlow - Main React Flow component for the mindmap
  * Handles rendering, interactions, and clipboard operations
  */
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ReactFlow,
     Background,
@@ -10,26 +10,25 @@ import {
     MiniMap,
     useNodesState,
     useEdgesState,
+    ReactFlowProvider,
     type Node,
     type Edge,
     type NodeMouseHandler,
     SelectionMode,
-    ReactFlowProvider,
+    Panel,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import { MindMapNode } from './MindMapNode';
-import {
-    convertToFlowElements,
-    toggleNodeExpanded,
-    addChildNode,
-    removeNode,
-    updateNodeTopic,
-    findNodeInTree,
-    type MindMapNodeData,
-    type LayoutOptions,
-} from './layoutUtils';
+import { convertToFlowElements } from './layoutEngine';
+import { findNodeInTree } from './treeOperations';
+import type { MindMapNodeData, LayoutOptions } from './flowTypes';
 import type { MindNode, MindMapData, Direction } from '../../types';
+
+import { useMindMapTree } from './hooks/useMindMapTree';
+import { useNodeDrag } from './hooks/useNodeDrag';
+import { useClipboard } from './hooks/useClipboard';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 
 // Register custom node types
 const nodeTypes = {
@@ -43,6 +42,8 @@ export interface MindMapFlowProps {
         horizontalGap: number;
         verticalGap: number;
         theme: 'primary' | 'dark' | 'auto';
+        lineWidth: number;
+        compact: boolean;
     };
     contentMap: Map<string, boolean>;
     onNodeSelect?: (node: MindNode) => void;
@@ -50,7 +51,8 @@ export interface MindMapFlowProps {
     onNodeDelete?: (node: MindNode) => void;
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
     onMapDataChange?: (data: MindMapData) => void;
-    onDrop?: (files: FileList) => void;
+    onDrop?: (files: FileList, targetNodeId: string | null) => void;
+    onPaste?: (files: File[], targetNodeId: string | null) => void;
     resolveImageUrl?: (relativePath: string) => string;
 }
 
@@ -64,317 +66,232 @@ function MindMapFlowInner({
     onNodeRename,
     onMapDataChange,
     onDrop,
+    onPaste,
     resolveImageUrl,
 }: MindMapFlowProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-    const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-    const [copiedNode, setCopiedNode] = useState<MindNode | null>(null);
-    const [cutNodeId, setCutNodeId] = useState<string | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // Store current tree state internally for mutations
-    const [treeData, setTreeData] = useState<MindNode>(mapData.nodeData);
-    // Use a ref to always have current treeData in callbacks (avoids stale closure)
-    const treeDataRef = useRef<MindNode>(treeData);
+    // 1. Tree State & Operations
+    const {
+        treeData,
+        setTreeData,
+        treeDataRef,
+        selectedNodeIds,
+        setSelectedNodeIds,
+        editTrigger,
+        setEditTrigger,
+        handleToggleExpand,
+        handleNodeRename,
+        addSibling,
+        addChild,
+        deleteSelected,
+        generateId,
+    } = useMindMapTree({
+        mapData,
+        onMapDataChange,
+        onNodeRename,
+        onNodeCreate,
+        onNodeDelete,
+    });
 
-    // Keep ref in sync with state
-    useEffect(() => {
-        treeDataRef.current = treeData;
-    }, [treeData]);
+    // 2. Drag & Drop
+    const {
+        dragState,
+        handleNodeDragStart,
+        handleNodeDrag,
+        handleNodeDragStop,
+    } = useNodeDrag({
+        treeDataRef,
+        selectedNodeIds,
+        setSelectedNodeIds,
+        setTreeData,
+        onMapDataChange,
+    });
 
-    // Update tree when mapData prop changes (only if it's a NEW map, not internal updates)
+    // 3. Clipboard
+    const {
+        copyNode,
+        cutNode,
+        pasteNode,
+    } = useClipboard({
+        treeDataRef,
+        selectedNodeIds,
+        setTreeData,
+        onMapDataChange,
+        onNodeCreate,
+        onPaste,
+        generateId,
+    });
+
+    // 4. Keyboard Shortcuts
+    useKeyboardShortcuts({
+        selectedNodeIds,
+        copyNode,
+        cutNode,
+        pasteNode,
+        addSibling,
+        deleteSelected,
+        addChild,
+        setEditTrigger,
+        handleToggleExpand,
+    });
+
+    // Local compact state (allows in-view toggle, initialized from settings)
+    const [isCompact, setIsCompact] = useState(settings.compact);
+
+    // Sync local state when settings change externally
     useEffect(() => {
-        // Only update if the root node ID changed (different map loaded)
-        if (mapData.nodeData.id !== treeData.id) {
-            setTreeData(mapData.nodeData);
-        }
-    }, [mapData]);
+        setIsCompact(settings.compact);
+    }, [settings.compact]);
 
     // Layout options from settings
     const layoutOptions: Partial<LayoutOptions> = useMemo(() => ({
         direction: settings.direction,
         horizontalGap: settings.horizontalGap,
         verticalGap: settings.verticalGap,
-    }), [settings]);
+        lineWidth: settings.lineWidth,
+        compact: isCompact,
+    }), [settings, isCompact]);
 
-    // Handle collapse/expand toggle
-    const handleToggleExpand = useCallback((nodeId: string) => {
-        setTreeData(prev => {
-            const newTree = toggleNodeExpanded(prev, nodeId);
-            onMapDataChange?.({ nodeData: newTree });
-            return newTree;
-        });
-    }, [onMapDataChange]);
-
-    // Handle node rename
-    const handleNodeRename = useCallback((nodeId: string, newTopic: string) => {
-        setTreeData(prev => {
-            const oldNode = findNodeInTree(prev, nodeId);
-            if (oldNode && oldNode.topic !== newTopic) {
-                const newTree = updateNodeTopic(prev, nodeId, newTopic);
-                onMapDataChange?.({ nodeData: newTree });
-
-                const newNode = findNodeInTree(newTree, nodeId);
-                if (newNode) {
-                    onNodeRename?.(newNode, oldNode.topic);
-                }
-                return newTree;
-            }
-            return prev;
-        });
-    }, [onMapDataChange, onNodeRename]);
-
-    const [fontsLoaded, setFontsLoaded] = useState(false);
-
-    // Trigger re-layout when fonts are ready ensuring accurate measurement
-    useEffect(() => {
-        if (document.fonts) {
-            document.fonts.ready.then(() => {
-                setFontsLoaded(true);
-            });
-        } else {
-            // Fallback
-            setTimeout(() => setFontsLoaded(true), 200);
-        }
-    }, []);
-
-    // Convert tree to flow elements whenever tree changes or fonts load
+    // Convert tree to flow elements whenever tree changes
     useEffect(() => {
         // Process image URLs for display
-        const processNode = (node: MindNode): MindNode => {
-            if (node.isImage && node.imageUrl && resolveImageUrl) {
-                return {
-                    ...node,
-                    imageUrl: resolveImageUrl(node.imageUrl),
-                    children: node.children?.map(processNode) || [],
-                };
-            }
-            return {
-                ...node,
-                children: node.children?.map(processNode) || [],
-            };
-        };
-
-        const displayTree = processNode(treeData);
-        // We depend on fontsLoaded state to trigger a re-render after fonts are ready
-        // The measureNodeWidth function uses DOM measurement which requires fonts to be loaded
         const { nodes: newNodes, edges: newEdges } = convertToFlowElements(
-            displayTree,
+            treeData,
             layoutOptions,
             contentMap,
             {
                 onToggleExpand: handleToggleExpand,
                 onNodeRename: handleNodeRename,
+                editTrigger: editTrigger,
+                resolveImageUrl: resolveImageUrl,
             }
         );
-        setNodes(newNodes);
-        setEdges(newEdges);
-    }, [treeData, layoutOptions, contentMap, setNodes, setEdges, resolveImageUrl, handleToggleExpand, handleNodeRename, fontsLoaded]);
 
-    // Handle node selection
-    const handleNodeClick: NodeMouseHandler = useCallback((_, node) => {
-        setSelectedNodeId(node.id);
+        // Add drag state and selection state to nodes
+        const nodesWithState = newNodes.map(node => ({
+            ...node,
+            selected: selectedNodeIds.has(node.id),
+            data: {
+                ...node.data,
+                isDragging: false,
+                dropZone: null,
+            },
+        }));
+
+        setNodes(nodesWithState);
+        setEdges(newEdges);
+    }, [
+        treeData,
+        layoutOptions,
+        contentMap,
+        setNodes,
+        setEdges,
+        resolveImageUrl,
+        handleToggleExpand,
+        handleNodeRename,
+        editTrigger,
+        selectedNodeIds
+    ]);
+
+    // Update node drag states separately (without regenerating layout)
+    useEffect(() => {
+        setNodes(nds => nds.map(node => ({
+            ...node,
+            data: {
+                ...node.data,
+                isDragging: dragState.draggedNodeId === node.id,
+                dropZone: dragState.targetNodeId === node.id ? dragState.dropZone : null,
+            },
+        })));
+    }, [dragState, setNodes]);
+
+    // Handle node selection click
+    const handleNodeClick: NodeMouseHandler = useCallback((event, node) => {
+        const isMultiSelect = event.shiftKey || event.ctrlKey || event.metaKey;
+
+        setSelectedNodeIds(prev => {
+            const next = new Set(isMultiSelect ? prev : []);
+            if (isMultiSelect && prev.has(node.id)) {
+                next.delete(node.id);
+            } else {
+                next.add(node.id);
+            }
+            return next;
+        });
+
         // Use ref to get current tree data (avoids stale closure)
         const currentTree = treeDataRef.current;
         const mindNode = findNodeInTree(currentTree, node.id);
         if (mindNode) {
             onNodeSelect?.(mindNode);
         }
-    }, [onNodeSelect]);
+    }, [onNodeSelect, treeDataRef, setSelectedNodeIds]);
 
-    // Generate unique ID
-    const generateId = useCallback(() => {
-        return Math.random().toString(16).slice(2, 18);
+    const handlePaneClick = useCallback(() => {
+        setSelectedNodeIds(new Set());
+    }, [setSelectedNodeIds]);
+
+    const handleDragOver = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
     }, []);
 
-    // Add child to selected node
-    const addChild = useCallback(() => {
-        const currentTree = treeDataRef.current;
-        const parentId = selectedNodeId || currentTree.id;
-        const newNode: MindNode = {
-            id: generateId(),
-            topic: 'New Node',
-            filepath: '',
-            children: [],
-            expanded: true,
-        };
-
-        const newTree = addChildNode(currentTree, parentId, newNode);
-        setTreeData(newTree);
-        onMapDataChange?.({ nodeData: newTree });
-        onNodeCreate?.(newNode, parentId);
-    }, [selectedNodeId, generateId, onMapDataChange, onNodeCreate]);
-
-    // Delete selected node
-    const deleteSelected = useCallback(() => {
-        const currentTree = treeDataRef.current;
-        if (!selectedNodeId || selectedNodeId === currentTree.id) return; // Can't delete root
-
-        const nodeToDelete = findNodeInTree(currentTree, selectedNodeId);
-        if (nodeToDelete) {
-            const newTree = removeNode(currentTree, selectedNodeId);
-            if (newTree) {
-                setTreeData(newTree);
-                onMapDataChange?.({ nodeData: newTree });
-                onNodeDelete?.(nodeToDelete);
-                setSelectedNodeId(null);
-            }
-        }
-    }, [selectedNodeId, onMapDataChange, onNodeDelete]);
-
-    // Deep clone a node for copying
-    const cloneNode = useCallback((node: MindNode): MindNode => {
-        return {
-            ...node,
-            id: generateId(),
-            filepath: '', // New file will be created
-            children: node.children?.map(cloneNode) || [],
-        };
-    }, [generateId]);
-
-    // Copy node
-    const copyNode = useCallback(() => {
-        if (!selectedNodeId) return;
-        const currentTree = treeDataRef.current;
-        const node = findNodeInTree(currentTree, selectedNodeId);
-        if (node) {
-            setCopiedNode(node);
-            setCutNodeId(null);
-        }
-    }, [selectedNodeId]);
-
-    // Cut node
-    const cutNode = useCallback(() => {
-        const currentTree = treeDataRef.current;
-        if (!selectedNodeId || selectedNodeId === currentTree.id) return;
-        const node = findNodeInTree(currentTree, selectedNodeId);
-        if (node) {
-            setCopiedNode(node);
-            setCutNodeId(selectedNodeId);
-        }
-    }, [selectedNodeId]);
-
-    // Paste node
-    const pasteNode = useCallback(() => {
-        if (!copiedNode) return;
-        const currentTree = treeDataRef.current;
-        const parentId = selectedNodeId || currentTree.id;
-
-        // Clone the copied node with new IDs
-        const newNode = cloneNode(copiedNode);
-
-        let newTree = addChildNode(currentTree, parentId, newNode);
-
-        // If it was a cut, remove the original
-        if (cutNodeId) {
-            newTree = removeNode(newTree, cutNodeId) || newTree;
-            setCutNodeId(null);
-        }
-
-        setTreeData(newTree);
-        onMapDataChange?.({ nodeData: newTree });
-        onNodeCreate?.(newNode, parentId);
-    }, [copiedNode, cutNodeId, selectedNodeId, cloneNode, onMapDataChange, onNodeCreate]);
-
-    // Keyboard shortcuts
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Check if we're in an input field
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-                return;
-            }
-
-            if (e.ctrlKey || e.metaKey) {
-                switch (e.key.toLowerCase()) {
-                    case 'c':
-                        e.preventDefault();
-                        copyNode();
-                        break;
-                    case 'x':
-                        e.preventDefault();
-                        cutNode();
-                        break;
-                    case 'v':
-                        e.preventDefault();
-                        pasteNode();
-                        break;
-                }
-            } else {
-                switch (e.key) {
-                    case 'Tab':
-                        e.preventDefault();
-                        addChild();
-                        break;
-                    case 'Delete':
-                    case 'Backspace':
-                        e.preventDefault();
-                        deleteSelected();
-                        break;
-                }
-            }
-        };
-
-        const container = containerRef.current;
-        container?.addEventListener('keydown', handleKeyDown);
-        return () => container?.removeEventListener('keydown', handleKeyDown);
-    }, [copyNode, cutNode, pasteNode, addChild, deleteSelected]);
-
-    // Handle drop
-    const handleDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        const files = e.dataTransfer?.files;
-        if (files && files.length > 0) {
-            onDrop?.(files);
+    const handleDrop = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+            // TODO: Better target detection using elementFromPoint if needed
+            // For now, dropping on the canvas defaults to no target (root or context sensitive)
+            onDrop?.(event.dataTransfer.files, null);
         }
     }, [onDrop]);
 
-    const handleDragOver = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-    }, []);
-
-    // Determine theme
-    const isDark = settings.theme === 'dark' ||
-        (settings.theme === 'auto' && document.body.classList.contains('theme-dark'));
-
     return (
         <div
+            style={{ width: '100%', height: '100%' }}
             ref={containerRef}
-            className="mindmap-flow-container"
-            onDrop={handleDrop}
             onDragOver={handleDragOver}
-            tabIndex={0}
+            onDrop={handleDrop}
         >
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
-                onNodeClick={handleNodeClick}
                 nodeTypes={nodeTypes}
-                nodesDraggable={false}
-                nodesConnectable={false}
-                elementsSelectable={true}
-                selectionMode={SelectionMode.Partial}
+                onNodeClick={handleNodeClick}
+                onPaneClick={handlePaneClick}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDrag={handleNodeDrag}
+                onNodeDragStop={handleNodeDragStop}
                 fitView
-                fitViewOptions={{ padding: 0.2 }}
-                zoomOnDoubleClick={false}
-                colorMode={isDark ? 'dark' : 'light'}
+                selectionMode={SelectionMode.Partial}
+                minZoom={0.1}
+                maxZoom={2}
+                nodesDraggable={true}
+                nodesConnectable={false}
                 proOptions={{ hideAttribution: true }}
             >
                 <Background />
                 <Controls />
-                <MiniMap
-                    nodeStrokeWidth={3}
-                    zoomable
-                    pannable
-                />
+                <MiniMap />
+                <Panel position="top-right">
+                    <button
+                        className={`mindnote-compact-toggle ${isCompact ? 'active' : ''}`}
+                        onClick={() => setIsCompact(v => !v)}
+                        aria-label={isCompact ? 'Switch to normal layout' : 'Switch to compact layout'}
+                        title={isCompact ? 'Normal layout' : 'Compact layout'}
+                    >
+                        {isCompact ? '⊟' : '⊞'}
+                    </button>
+                </Panel>
             </ReactFlow>
         </div>
     );
 }
 
-// Wrap with ReactFlowProvider
 export function MindMapFlow(props: MindMapFlowProps) {
     return (
         <ReactFlowProvider>

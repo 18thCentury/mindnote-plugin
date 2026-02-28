@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import type MindNotePlugin from '../main';
 import { VIEW_TYPE_MINDNOTE, MindMapData, MindNode, MAP_FILE_NAME, FILE_EXTENSION_MN } from '../types';
 import { FileSystemManager, TransactionManager, StateSynchronizer } from '../core';
-import { MindMapFlow, type MindMapFlowProps } from './components';
+import { MindMapFlow, type MindMapFlowProps, findNodeInTree, addChildNode } from './components';
 
 export class MindNoteView extends ItemView {
     plugin: MindNotePlugin;
@@ -30,7 +30,7 @@ export class MindNoteView extends ItemView {
         this.plugin = plugin;
 
         // Initialize core modules
-        this.fsm = new FileSystemManager(this.app);
+        this.fsm = new FileSystemManager(this.app, () => this.plugin.settings);
         this.txManager = new TransactionManager(this.app);
         this.synchronizer = new StateSynchronizer(this.app, this.fsm, this.txManager);
     }
@@ -118,6 +118,12 @@ export class MindNoteView extends ItemView {
             // Build content map for all nodes
             await this.updateContentMap(mapData.nodeData);
 
+            // Register content change listener to update contentMap when files are modified
+            this.synchronizer.setOnContentChange((nodeId, hasContent) => {
+                this.contentMap.set(nodeId, hasContent);
+                this.rerenderMindMap();
+            });
+
             // Create React root and render
             this.renderReactFlow(container, mapData);
         } catch (error) {
@@ -126,6 +132,18 @@ export class MindNoteView extends ItemView {
                 cls: 'mindnote-error'
             });
             console.error('MindNote load error:', error);
+        }
+    }
+
+    /**
+     * Re-render the mind map with current data
+     */
+    public rerenderMindMap(): void {
+        if (!this.containerEl_) return;
+        const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
+        if (mapContainer) {
+            const mapData = this.synchronizer.getDisplayMapData();
+            this.renderReactFlow(mapContainer, mapData);
         }
     }
 
@@ -168,6 +186,8 @@ export class MindNoteView extends ItemView {
                 horizontalGap: settings.horizontalGap,
                 verticalGap: settings.verticalGap,
                 theme: settings.theme,
+                lineWidth: settings.lineWidth,
+                compact: settings.compact,
             },
             contentMap: this.contentMap,
             onNodeSelect: this.handleNodeSelect.bind(this),
@@ -176,6 +196,7 @@ export class MindNoteView extends ItemView {
             onNodeRename: this.handleNodeRename.bind(this),
             onMapDataChange: this.handleMapDataChange.bind(this),
             onDrop: this.handleDrop.bind(this),
+            onPaste: this.handlePaste.bind(this),
             resolveImageUrl: this.resolveImageUrl.bind(this),
         };
 
@@ -226,22 +247,29 @@ export class MindNoteView extends ItemView {
         await this.synchronizer.saveMapState();
     }
 
-    /**
-     * Handle file drop
-     */
-    private async handleDrop(files: FileList): Promise<void> {
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            try {
-                const relativePath = await this.synchronizer.importImage(file);
 
-                // Get current map data and find selected node
+
+    /**
+     * Common logic to import files (images/text) as nodes
+     */
+    private async importFiles(files: File[], targetNodeId: string | null): Promise<void> {
+        for (const file of files) {
+            try {
+                // Determine parent node
                 const mapData = this.synchronizer.getMapData();
-                const selectedNode = mapData.nodeData; // Default to root if no selection
+                let parentNodeId = mapData.nodeData.id;
+
+                if (targetNodeId) {
+                    const found = findNodeInTree(mapData.nodeData, targetNodeId);
+                    if (found) {
+                        parentNodeId = found.id;
+                    }
+                }
 
                 let newNode: MindNode;
 
                 if (file.type.startsWith('image/')) {
+                    const relativePath = await this.synchronizer.importImage(file);
                     newNode = {
                         id: crypto.randomUUID(),
                         topic: file.name,
@@ -252,6 +280,8 @@ export class MindNoteView extends ItemView {
                         imageUrl: relativePath,
                     };
                 } else {
+                    // For non-image files, maybe create a link or text node? 
+                    // Current behavior creates a node with filename.
                     newNode = {
                         id: crypto.randomUUID(),
                         topic: file.name,
@@ -261,24 +291,42 @@ export class MindNoteView extends ItemView {
                     };
                 }
 
-                // Add as child of current selection (default to root)
-                this.synchronizer.onNodeCreated(newNode);
+                // Add to tree using layoutUtils helper
+                const newTree = addChildNode(mapData.nodeData, parentNodeId, newNode);
 
-                // Re-render with updated data
+                // Save
+                await this.handleMapDataChange({ nodeData: newTree });
+
+                // Trigger creation hooks
+                if (!newNode.isImage) {
+                    this.synchronizer.onNodeCreated(newNode);
+                }
+
+                // Render
                 const updatedData = this.synchronizer.getDisplayMapData();
                 await this.updateContentMap(updatedData.nodeData);
-
-                if (this.containerEl_) {
-                    const mapContainer = this.containerEl_.querySelector('.mindnote-map') as HTMLElement;
-                    if (mapContainer) {
-                        this.renderReactFlow(mapContainer, updatedData);
-                    }
-                }
+                this.rerenderMindMap();
 
                 new Notice(`Imported: ${file.name}`);
             } catch (error) {
                 new Notice(`Failed to import file: ${error}`);
+                console.error(error);
             }
         }
+    }
+
+    /**
+     * Handle file drop - add dropped files as children of target node
+     */
+    private async handleDrop(fileList: FileList, targetNodeId: string | null): Promise<void> {
+        const files = Array.from(fileList);
+        await this.importFiles(files, targetNodeId);
+    }
+
+    /**
+     * Handle paste - add pasted files as children of target node
+     */
+    private async handlePaste(files: File[], targetNodeId: string | null): Promise<void> {
+        await this.importFiles(files, targetNodeId);
     }
 }
