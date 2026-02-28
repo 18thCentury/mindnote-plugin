@@ -7,6 +7,7 @@ import {
     ReactFlow,
     Background,
     Controls,
+    ControlButton,
     MiniMap,
     useNodesState,
     useEdgesState,
@@ -275,18 +276,17 @@ function MindMapFlowInner({
                 proOptions={{ hideAttribution: true }}
             >
                 <Background />
-                <Controls />
-                <MiniMap />
-                <Panel position="top-right">
-                    <button
+                <Controls showInteractive={false}>
+                    <ControlButton
                         className={`mindnote-compact-toggle ${isCompact ? 'active' : ''}`}
                         onClick={() => setIsCompact(v => !v)}
                         aria-label={isCompact ? 'Switch to normal layout' : 'Switch to compact layout'}
                         title={isCompact ? 'Normal layout' : 'Compact layout'}
                     >
                         {isCompact ? '⊟' : '⊞'}
-                    </button>
-                </Panel>
+                    </ControlButton>
+                </Controls>
+                <MiniMap />
             </ReactFlow>
         </div>
     );

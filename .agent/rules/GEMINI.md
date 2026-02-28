@@ -2,6 +2,10 @@
 trigger: always_on
 ---
 
+## Basic
+
+### 1. Every response,call me "Evan" first.
+
 ## Workflow Orchestration
 
 ### 1. Plan Node Default
