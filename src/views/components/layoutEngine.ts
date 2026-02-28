@@ -85,11 +85,10 @@ function measureNodeDimensions(
     // Sync with styles.css: padding: 8px 12px; + 6px gap
     // Adding extra for handles and toggle safely (reduced in compact mode)
     const isCompact = !!options.compact;
-    const toggleBuffer = hasChildren ? (isCompact ? 8 : 15) : 0;
     const widthPadding = isCompact ? 4 : 10;
     const heightPadding = isCompact ? 2 : 4;
     return {
-        width: Math.max(40, width + toggleBuffer + widthPadding),
+        width: Math.max(40, width + widthPadding),
         height: Math.max(options.nodeHeight, height + heightPadding)
     };
 }
