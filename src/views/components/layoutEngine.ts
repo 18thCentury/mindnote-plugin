@@ -320,10 +320,10 @@ function applyTreeLayout(
     // Compact mode intentionally tightens both axes so branch contours can
     // "interlock" more aggressively (similar to XMind compact layout).
     const effectiveHGap = isCompact
-        ? Math.max(16, Math.round(options.horizontalGap * 0.65))
+        ? Math.max(20, Math.round(options.horizontalGap * 0.7))
         : options.horizontalGap;
     const effectiveVGap = isCompact
-        ? Math.max(8, Math.round(options.verticalGap * 0.55))
+        ? Math.max(10, Math.round(options.verticalGap * 0.6))
         : options.verticalGap;
 
     // 1. Build parent -> children map from edges
@@ -417,6 +417,24 @@ function applyTreeLayout(
             const childDx = dims.width + effectiveHGap;
             let subtreeContour = selfContour;
             for (let i = 0; i < childResults.length; i++) {
+                // Reserve a slim connector corridor between parent and child.
+                // Without this, compact packing can place another branch's node
+                // directly over the bend/segment of an edge in compact mode.
+                const connectorHalfHeight = Math.max(4, Math.ceil(options.lineWidth * 2));
+                const connectorContour: BranchContour = {
+                    segments: [{
+                        xStart: dims.width,
+                        xEnd: childDx,
+                        top: childCenterYs[i] - connectorHalfHeight,
+                        bottom: childCenterYs[i] + connectorHalfHeight,
+                    }],
+                };
+
+                subtreeContour = mergeContours(
+                    subtreeContour,
+                    connectorContour
+                );
+
                 subtreeContour = mergeContours(
                     subtreeContour,
                     shiftContour(childResults[i].contour, childDx, childCenterYs[i])
