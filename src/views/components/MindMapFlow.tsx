@@ -55,6 +55,8 @@ export interface MindMapFlowProps {
     onDrop?: (files: FileList, targetNodeId: string | null) => void;
     onPaste?: (files: File[], targetNodeId: string | null) => void;
     resolveImageUrl?: (relativePath: string) => string;
+    onUndo?: () => void;
+    onRedo?: () => void;
 }
 
 function MindMapFlowInner({
@@ -69,6 +71,8 @@ function MindMapFlowInner({
     onDrop,
     onPaste,
     resolveImageUrl,
+    onUndo,
+    onRedo,
 }: MindMapFlowProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -137,6 +141,8 @@ function MindMapFlowInner({
         addChild,
         setEditTrigger,
         handleToggleExpand,
+        undo: () => onUndo?.(),
+        redo: () => onRedo?.(),
     });
 
     // Local compact state (allows in-view toggle, initialized from settings)

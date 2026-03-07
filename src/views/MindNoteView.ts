@@ -2,13 +2,19 @@
  * MindNote View
  * Main view for displaying and interacting with the mindmap using React Flow
  */
-import { ItemView, WorkspaceLeaf, TFile, Notice, normalizePath } from 'obsidian';
+import { ItemView, WorkspaceLeaf, TFile, TFolder, Notice, normalizePath } from 'obsidian';
 import { createRoot, type Root } from 'react-dom/client';
 import { createElement } from 'react';
 import type MindNotePlugin from '../main';
 import { VIEW_TYPE_MINDNOTE, MindMapData, MindNode, MAP_FILE_NAME, FILE_EXTENSION_MN } from '../types';
 import { FileSystemManager, TransactionManager, StateSynchronizer } from '../core';
 import { MindMapFlow, type MindMapFlowProps, findNodeInTree, addChildNode } from './components';
+
+interface BundleSnapshot {
+    mapData: MindMapData;
+    files: Array<{ path: string; content: ArrayBuffer }>;
+}
+
 
 export class MindNoteView extends ItemView {
     plugin: MindNotePlugin;
@@ -24,6 +30,12 @@ export class MindNoteView extends ItemView {
 
     // Content tracking
     private contentMap: Map<string, boolean> = new Map();
+
+    // In-view history (cleared on close)
+    private undoStack: BundleSnapshot[] = [];
+    private redoStack: BundleSnapshot[] = [];
+    private readonly maxHistorySize = 30;
+    private isApplyingHistory = false;
 
     constructor(leaf: WorkspaceLeaf, plugin: MindNotePlugin) {
         super(leaf);
@@ -71,6 +83,9 @@ export class MindNoteView extends ItemView {
         // Flush pending synchronizer operations
         await this.synchronizer.flush();
         this.synchronizer.dispose();
+
+        // Clear history when closing MindNote
+        this.clearHistory();
     }
 
     /**
@@ -88,6 +103,9 @@ export class MindNoteView extends ItemView {
         }
 
         if (state.bundlePath) {
+            if (this.bundlePath !== state.bundlePath) {
+                this.clearHistory();
+            }
             this.bundlePath = state.bundlePath;
             this.bundleName = this.bundlePath.split('/').pop()?.replace('.mn', '') || 'MindNote';
 
@@ -116,6 +134,7 @@ export class MindNoteView extends ItemView {
             const mapData = this.synchronizer.getDisplayMapData();
 
             // Build content map for all nodes
+            this.contentMap.clear();
             await this.updateContentMap(mapData.nodeData);
 
             // Register content change listener to update contentMap when files are modified
@@ -198,6 +217,8 @@ export class MindNoteView extends ItemView {
             onDrop: this.handleDrop.bind(this),
             onPaste: this.handlePaste.bind(this),
             resolveImageUrl: this.resolveImageUrl.bind(this),
+            onUndo: this.handleUndo.bind(this),
+            onRedo: this.handleRedo.bind(this),
         };
 
         this.reactRoot.render(createElement(MindMapFlow, props));
@@ -242,9 +263,146 @@ export class MindNoteView extends ItemView {
     /**
      * Handle map data change - sync to storage
      */
-    private async handleMapDataChange(data: MindMapData): Promise<void> {
+    private async handleMapDataChange(data: MindMapData, recordHistory: boolean = true): Promise<void> {
+        if (recordHistory && !this.isApplyingHistory) {
+            await this.pushUndoSnapshot();
+            this.redoStack = [];
+        }
+
         this.synchronizer.setMapData(data);
         await this.synchronizer.saveMapState();
+    }
+
+
+    private async handleUndo(): Promise<void> {
+        if (this.undoStack.length === 0 || this.isApplyingHistory) return;
+
+        const snapshot = this.undoStack.pop();
+        if (!snapshot) return;
+
+        const current = await this.captureBundleSnapshot();
+        if (current) {
+            this.redoStack.push(current);
+            if (this.redoStack.length > this.maxHistorySize) {
+                this.redoStack.shift();
+            }
+        }
+
+        await this.applySnapshot(snapshot);
+    }
+
+    private async handleRedo(): Promise<void> {
+        if (this.redoStack.length === 0 || this.isApplyingHistory) return;
+
+        const snapshot = this.redoStack.pop();
+        if (!snapshot) return;
+
+        const current = await this.captureBundleSnapshot();
+        if (current) {
+            this.undoStack.push(current);
+            if (this.undoStack.length > this.maxHistorySize) {
+                this.undoStack.shift();
+            }
+        }
+
+        await this.applySnapshot(snapshot);
+    }
+
+    private async pushUndoSnapshot(): Promise<void> {
+        const snapshot = await this.captureBundleSnapshot();
+        if (!snapshot) return;
+
+        this.undoStack.push(snapshot);
+        if (this.undoStack.length > this.maxHistorySize) {
+            this.undoStack.shift();
+        }
+    }
+
+    private clearHistory(): void {
+        this.undoStack = [];
+        this.redoStack = [];
+    }
+
+    private async captureBundleSnapshot(): Promise<BundleSnapshot | null> {
+        const mapData = this.synchronizer.getMapData();
+        const folder = this.app.vault.getAbstractFileByPath(this.bundlePath);
+        if (!(folder instanceof TFolder)) {
+            return null;
+        }
+
+        const files = await this.collectFiles(folder);
+        const snapshots: Array<{ path: string; content: ArrayBuffer }> = [];
+
+        for (const file of files) {
+            try {
+                const content = await this.app.vault.readBinary(file);
+                snapshots.push({ path: file.path, content });
+            } catch (error) {
+                console.error('MindNote: Failed to snapshot file', file.path, error);
+            }
+        }
+
+        return {
+            mapData: JSON.parse(JSON.stringify(mapData)),
+            files: snapshots,
+        };
+    }
+
+    private async collectFiles(folder: TFolder): Promise<TFile[]> {
+        const result: TFile[] = [];
+        const walk = (node: TFolder): void => {
+            for (const child of node.children) {
+                if (child instanceof TFile) {
+                    result.push(child);
+                } else if (child instanceof TFolder) {
+                    walk(child);
+                }
+            }
+        };
+        walk(folder);
+        return result;
+    }
+
+    private async applySnapshot(snapshot: BundleSnapshot): Promise<void> {
+        this.isApplyingHistory = true;
+        try {
+            await this.synchronizer.flush();
+
+            const bundleFolder = this.app.vault.getAbstractFileByPath(this.bundlePath);
+            if (!(bundleFolder instanceof TFolder)) {
+                return;
+            }
+
+            const existingFiles = await this.collectFiles(bundleFolder);
+            const keepPaths = new Set(snapshot.files.map(file => file.path));
+
+            for (const file of existingFiles) {
+                if (!keepPaths.has(file.path)) {
+                    await this.app.vault.delete(file);
+                }
+            }
+
+            for (const fileSnapshot of snapshot.files) {
+                await this.fsm.ensureDirectory(fileSnapshot.path.substring(0, fileSnapshot.path.lastIndexOf('/')));
+                const existing = this.app.vault.getAbstractFileByPath(fileSnapshot.path);
+                if (existing instanceof TFile) {
+                    await this.app.vault.modifyBinary(existing, fileSnapshot.content);
+                } else {
+                    await this.app.vault.createBinary(fileSnapshot.path, fileSnapshot.content);
+                }
+            }
+
+            this.synchronizer.setMapData(JSON.parse(JSON.stringify(snapshot.mapData)));
+            await this.synchronizer.saveMapState();
+            this.contentMap.clear();
+            await this.updateContentMap(snapshot.mapData.nodeData);
+            this.rerenderMindMap();
+        } catch (error) {
+            new Notice('History restore failed');
+            console.error('MindNote: History restore failed', error);
+        } finally {
+            this.isApplyingHistory = false;
+        }
     }
 
 
@@ -253,6 +411,11 @@ export class MindNoteView extends ItemView {
      * Common logic to import files (images/text) as nodes
      */
     private async importFiles(files: File[], targetNodeId: string | null): Promise<void> {
+        if (!this.isApplyingHistory) {
+            await this.pushUndoSnapshot();
+            this.redoStack = [];
+        }
+
         for (const file of files) {
             try {
                 // Determine parent node
@@ -295,7 +458,7 @@ export class MindNoteView extends ItemView {
                 const newTree = addChildNode(mapData.nodeData, parentNodeId, newNode);
 
                 // Save
-                await this.handleMapDataChange({ nodeData: newTree });
+                await this.handleMapDataChange({ nodeData: newTree }, false);
 
                 // Trigger creation hooks
                 if (!newNode.isImage) {

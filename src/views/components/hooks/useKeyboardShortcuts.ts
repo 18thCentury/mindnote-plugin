@@ -10,6 +10,8 @@ export interface UseKeyboardShortcutsProps {
     addChild: () => void;
     setEditTrigger: (trigger: { id: string; ts: number } | null) => void;
     handleToggleExpand: (nodeId: string) => void;
+    undo: () => void;
+    redo: () => void;
 }
 
 export function useKeyboardShortcuts({
@@ -22,6 +24,8 @@ export function useKeyboardShortcuts({
     addChild,
     setEditTrigger,
     handleToggleExpand,
+    undo,
+    redo,
 }: UseKeyboardShortcutsProps) {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -36,6 +40,14 @@ export function useKeyboardShortcuts({
 
             if (e.ctrlKey || e.metaKey) {
                 switch (e.key.toLowerCase()) {
+                    case 'z':
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            redo();
+                        } else {
+                            undo();
+                        }
+                        break;
                     case 'c':
                         e.preventDefault();
                         copyNode();
@@ -97,6 +109,8 @@ export function useKeyboardShortcuts({
         deleteSelected,
         addChild,
         setEditTrigger,
-        handleToggleExpand
+        handleToggleExpand,
+        undo,
+        redo,
     ]);
 }
