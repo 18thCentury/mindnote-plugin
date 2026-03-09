@@ -368,13 +368,6 @@ export class MindNoteView extends ItemView {
         try {
             await this.synchronizer.flush();
 
-            // Fast path: restore map first so undo/redo feels immediate.
-            this.synchronizer.setMapData(JSON.parse(JSON.stringify(snapshot.mapData)));
-            await this.synchronizer.saveMapState();
-            this.contentMap.clear();
-            await this.updateContentMap(snapshot.mapData.nodeData);
-            this.rerenderMindMap();
-
             const bundleFolder = this.app.vault.getAbstractFileByPath(this.bundlePath);
             if (!(bundleFolder instanceof TFolder)) {
                 return;
@@ -393,15 +386,17 @@ export class MindNoteView extends ItemView {
                 await this.fsm.ensureDirectory(fileSnapshot.path.substring(0, fileSnapshot.path.lastIndexOf('/')));
                 const existing = this.app.vault.getAbstractFileByPath(fileSnapshot.path);
                 if (existing instanceof TFile) {
-                    // Performance optimization: skip binary write when size is unchanged.
-                    if (existing.stat.size === fileSnapshot.content.byteLength) {
-                        continue;
-                    }
                     await this.app.vault.modifyBinary(existing, fileSnapshot.content);
                 } else {
                     await this.app.vault.createBinary(fileSnapshot.path, fileSnapshot.content);
                 }
             }
+
+            this.synchronizer.setMapData(JSON.parse(JSON.stringify(snapshot.mapData)));
+            await this.synchronizer.saveMapState();
+            this.contentMap.clear();
+            await this.updateContentMap(snapshot.mapData.nodeData);
+            this.rerenderMindMap();
         } catch (error) {
             new Notice('History restore failed');
             console.error('MindNote: History restore failed', error);
