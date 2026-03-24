@@ -240,23 +240,22 @@ export class StateSynchronizer {
      * Execute node creation
      */
     private async executeNodeCreate(node: MindNode): Promise<void> {
-        const mdFolder = this.getMdFolderPath();
-        await this.fsm.ensureDirectory(mdFolder); // Ensure folder exists
-
-        const safeName = this.fsm.generateSafeName(node.topic, mdFolder);
-        const filePath = normalizePath(`${mdFolder}/${safeName}.md`);
+        const targetFolder = await this.getNodeMarkdownDirectory(node);
+        const safeName = this.fsm.generateSafeName(node.topic, targetFolder);
+        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}.md`);
+        const filePath = normalizePath(`${this.getMdFolderPath()}/${relativePath}`);
 
         await this.fsm.createFile(filePath, '');
         this.txManager.recordCreate(filePath);
 
         // Update node's filepath
-        node.filepath = `${safeName}.md`;
+        node.filepath = relativePath;
 
         // Update persistent map state
         if (this.mapData) {
             const storedNode = this.findNodeById(this.mapData.nodeData, node.id);
             if (storedNode) {
-                storedNode.filepath = `${safeName}.md`;
+                storedNode.filepath = relativePath;
             }
         }
     }
@@ -265,8 +264,7 @@ export class StateSynchronizer {
      * Execute node rename
      */
     private async executeNodeRename(node: MindNode, _oldTopic: string): Promise<void> {
-        const mdFolder = this.getMdFolderPath();
-        const oldPath = normalizePath(`${mdFolder}/${node.filepath}`);
+        const oldPath = normalizePath(`${this.getMdFolderPath()}/${node.filepath}`);
         const oldFile = this.app.vault.getAbstractFileByPath(oldPath);
 
         if (!(oldFile instanceof TFile)) {
@@ -275,20 +273,48 @@ export class StateSynchronizer {
             return;
         }
 
-        const safeName = this.fsm.generateSafeName(node.topic, mdFolder, oldPath);
-        const newPath = normalizePath(`${mdFolder}/${safeName}.md`);
+        const parentDir = this.getParentDirectory(node.filepath);
+        const safeName = this.fsm.generateSafeName(node.topic, parentDir, oldPath);
+        const newPath = normalizePath(`${parentDir}/${safeName}.md`);
+        const newRelativePath = this.toRelativeMdPath(newPath);
 
         if (oldPath !== newPath) {
+            // If this node has descendants, close any open markdown under the folder to avoid lock/conflicts
+            if (node.children && node.children.length > 0 && this.currentOpenNode) {
+                const currentOpenPath = normalizePath(`${this.getMdFolderPath()}/${this.currentOpenNode.filepath}`);
+                const oldFolderPath = this.stripMarkdownExtension(oldPath);
+                if (currentOpenPath === oldPath || currentOpenPath.startsWith(`${oldFolderPath}/`)) {
+                    await this.closeCurrentMarkdown();
+                }
+            }
+
             await this.fsm.renameFile(oldFile, newPath);
             this.txManager.recordRename(oldPath, newPath);
 
-            node.filepath = `${safeName}.md`;
+            node.filepath = newRelativePath;
+
+            const oldFolderPath = this.stripMarkdownExtension(oldPath);
+            const newFolderPath = this.stripMarkdownExtension(newPath);
+
+            // If this node has children, rename its subtree folder as well
+            if (node.children && node.children.length > 0) {
+                const existingFolder = this.app.vault.getAbstractFileByPath(oldFolderPath);
+                if (existingFolder instanceof TFolder) {
+                    await this.fsm.renameFile(existingFolder, newFolderPath);
+                }
+
+                // Update descendant relative filepaths in memory and stored map state
+                this.rewriteDescendantFilepaths(node, oldFolderPath, newFolderPath);
+            }
 
             // Update persistent map state
             if (this.mapData) {
                 const storedNode = this.findNodeById(this.mapData.nodeData, node.id);
                 if (storedNode) {
-                    storedNode.filepath = `${safeName}.md`;
+                    storedNode.filepath = newRelativePath;
+                    if (storedNode.children && storedNode.children.length > 0) {
+                        this.rewriteDescendantFilepaths(storedNode, oldFolderPath, newFolderPath);
+                    }
                 }
             }
         }
@@ -488,11 +514,10 @@ export class StateSynchronizer {
      * Ensure a node has an associated markdown file, creating one if needed
      */
     private async ensureNodeHasMarkdown(node: MindNode): Promise<void> {
-        const mdFolder = this.getMdFolderPath();
-        await this.fsm.ensureDirectory(mdFolder);
-
-        const safeName = this.fsm.generateSafeName(node.topic, mdFolder);
-        const filePath = normalizePath(`${mdFolder}/${safeName}.md`);
+        const targetFolder = await this.getNodeMarkdownDirectory(node);
+        const safeName = this.fsm.generateSafeName(node.topic, targetFolder);
+        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}.md`);
+        const filePath = normalizePath(`${this.getMdFolderPath()}/${relativePath}`);
 
         // Create the file if it doesn't exist
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
@@ -501,13 +526,13 @@ export class StateSynchronizer {
         }
 
         // Update node's filepath
-        node.filepath = `${safeName}.md`;
+        node.filepath = relativePath;
 
         // Update persistent map state
         if (this.mapData) {
             const storedNode = this.findNodeById(this.mapData.nodeData, node.id);
             if (storedNode) {
-                storedNode.filepath = `${safeName}.md`;
+                storedNode.filepath = relativePath;
             }
             // Save immediately
             await this.saveMapState();
@@ -643,8 +668,8 @@ export class StateSynchronizer {
         // Only process markdown files in the md folder
         if (!this.mapData || !file.path.includes('/md/')) return;
 
-        const filename = file.name;
-        const node = this.findNodeByFilepath(this.mapData.nodeData, filename);
+        const relativePath = this.toRelativeMdPath(file.path);
+        const node = this.findNodeByFilepath(this.mapData.nodeData, relativePath);
         if (node && this.onContentChangeCallback) {
             const content = await this.app.vault.read(file);
             const hasContent = content.trim().length > 0;
@@ -658,15 +683,15 @@ export class StateSynchronizer {
     private async onExternalFileRename(file: TFile, oldPath: string): Promise<void> {
         if (!this.mapData) return;
 
-        const oldFilename = oldPath.split('/').pop() || '';
-        const newFilename = file.name;
+        const oldRelativePath = this.toRelativeMdPath(oldPath);
+        const newRelativePath = this.toRelativeMdPath(file.path);
 
         // Find and update the node with this filepath
-        const node = this.findNodeByFilepath(this.mapData.nodeData, oldFilename);
+        const node = this.findNodeByFilepath(this.mapData.nodeData, oldRelativePath);
         if (node) {
-            node.filepath = newFilename;
+            node.filepath = newRelativePath;
             // Also update topic to match filename (without extension)
-            node.topic = newFilename.replace(/\.md$/, '');
+            node.topic = file.basename;
             await this.saveMapState();
         }
     }
@@ -679,8 +704,8 @@ export class StateSynchronizer {
         // as this could be destructive. Just clear the filepath.
         if (!this.mapData) return;
 
-        const filename = file.name;
-        const node = this.findNodeByFilepath(this.mapData.nodeData, filename);
+        const relativePath = this.toRelativeMdPath(file.path);
+        const node = this.findNodeByFilepath(this.mapData.nodeData, relativePath);
         if (node) {
             node.filepath = '';
             await this.saveMapState();
@@ -724,4 +749,82 @@ export class StateSynchronizer {
         const folder = this.app.vault.getAbstractFileByPath(path);
         return folder instanceof TFolder ? folder : null;
     }
+
+    private async getNodeMarkdownDirectory(node: MindNode): Promise<string> {
+        const mdFolder = this.getMdFolderPath();
+        await this.fsm.ensureDirectory(mdFolder);
+
+        if (!this.mapData) {
+            return mdFolder;
+        }
+
+        const parentNode = this.findParentNodeById(this.mapData.nodeData, node.id);
+        if (!parentNode || !parentNode.filepath) {
+            return mdFolder;
+        }
+
+        const parentFilePath = normalizePath(`${mdFolder}/${parentNode.filepath}`);
+        const parentFolderPath = this.stripMarkdownExtension(parentFilePath);
+        await this.fsm.ensureDirectory(parentFolderPath);
+        return parentFolderPath;
+    }
+
+    private findParentNodeById(root: MindNode, targetId: string): MindNode | null {
+        if (!root.children || root.children.length === 0) {
+            return null;
+        }
+
+        for (const child of root.children) {
+            if (child.id === targetId) {
+                return root;
+            }
+            const found = this.findParentNodeById(child, targetId);
+            if (found) {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private stripMarkdownExtension(path: string): string {
+        return path.endsWith('.md') ? path.slice(0, -3) : path;
+    }
+
+    private getParentDirectory(filePath: string): string {
+        const absolutePath = normalizePath(`${this.getMdFolderPath()}/${filePath}`);
+        const segments = absolutePath.split('/');
+        segments.pop();
+        return normalizePath(segments.join('/'));
+    }
+
+    private toRelativeMdPath(absolutePath: string): string {
+        const normalizedPath = normalizePath(absolutePath);
+        const mdPrefix = `${this.getMdFolderPath()}/`;
+        if (normalizedPath.startsWith(mdPrefix)) {
+            return normalizedPath.slice(mdPrefix.length);
+        }
+        return normalizedPath;
+    }
+
+    private rewriteDescendantFilepaths(node: MindNode, oldFolderAbsPath: string, newFolderAbsPath: string): void {
+        if (!node.children || node.children.length === 0) {
+            return;
+        }
+
+        const oldPrefix = `${normalizePath(oldFolderAbsPath)}/`;
+        const newPrefix = `${normalizePath(newFolderAbsPath)}/`;
+
+        for (const child of node.children) {
+            if (child.filepath) {
+                const childAbsPath = normalizePath(`${this.getMdFolderPath()}/${child.filepath}`);
+                if (childAbsPath.startsWith(oldPrefix)) {
+                    child.filepath = this.toRelativeMdPath(childAbsPath.replace(oldPrefix, newPrefix));
+                }
+            }
+            this.rewriteDescendantFilepaths(child, oldFolderAbsPath, newFolderAbsPath);
+        }
+    }
+
 }
+

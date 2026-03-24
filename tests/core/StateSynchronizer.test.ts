@@ -6,7 +6,7 @@ import { StateSynchronizer } from '../../src/core/StateSynchronizer';
 import { FileSystemManager } from '../../src/core/FileSystemManager';
 import { TransactionManager } from '../../src/core/TransactionManager';
 import { MindNode } from '../../src/types';
-import { TFile } from 'obsidian';
+import { TFile, TFolder } from 'obsidian';
 
 // Create mock implementations
 const createMockApp = () => ({
@@ -238,6 +238,83 @@ describe('StateSynchronizer', () => {
             await sync.openNodeMarkdown(nodeWithoutFilepath);
 
             expect(mockApp.workspace.getLeaf).toHaveBeenCalledWith('split', 'vertical');
+        });
+    });
+
+
+    describe('hierarchical markdown paths', () => {
+        beforeEach(async () => {
+            const mapData = {
+                nodeData: {
+                    id: 'root',
+                    topic: 'Root',
+                    filepath: 'Root.md',
+                    children: [
+                        { id: 'child', topic: 'Child', filepath: '', children: [], expanded: true },
+                    ],
+                    expanded: true,
+                },
+            };
+
+            mockApp.vault.getAbstractFileByPath.mockImplementation((path: string) => {
+                if (path.includes('map.mn')) {
+                    const f = new TFile(); f.path = path; f.name = 'map.mn'; return f;
+                }
+                if (path === 'test.mn/md/Root') {
+                    const folder = new TFolder();
+                    folder.path = path;
+                    folder.name = 'Root';
+                    return folder;
+                }
+                return null;
+            });
+
+            mockApp.vault.read.mockResolvedValue(JSON.stringify(mapData));
+            await sync.initialize('test.mn');
+        });
+
+        it('should create child markdown file under parent-named folder', async () => {
+            const node: MindNode = { id: 'child', topic: 'Child', filepath: '', children: [], expanded: true };
+
+            await (sync as any).executeNodeCreate(node);
+
+            expect(mockFsm.ensureDirectory).toHaveBeenCalledWith('test.mn/md/Root');
+            expect(mockFsm.createFile).toHaveBeenCalledWith('test.mn/md/Root/Child.md', '');
+            expect(node.filepath).toBe('Root/Child.md');
+        });
+
+        it('should rename both node markdown and subtree folder when node has children', async () => {
+            const node: MindNode = {
+                id: 'root',
+                topic: 'Renamed Root',
+                filepath: 'Root.md',
+                children: [{ id: 'c1', topic: 'C1', filepath: 'Root/C1.md', children: [], expanded: true }],
+                expanded: true,
+            };
+
+            const oldFile = new TFile();
+            oldFile.path = 'test.mn/md/Root.md';
+            oldFile.name = 'Root.md';
+
+            const oldFolder = new TFolder();
+            oldFolder.path = 'test.mn/md/Root';
+            oldFolder.name = 'Root';
+
+            mockApp.vault.getAbstractFileByPath.mockImplementation((path: string) => {
+                if (path === 'test.mn/md/Root.md') return oldFile;
+                if (path === 'test.mn/md/Root') return oldFolder;
+                if (path.includes('map.mn')) {
+                    const f = new TFile(); f.path = path; f.name = 'map.mn'; return f;
+                }
+                return null;
+            });
+
+            await (sync as any).executeNodeRename(node, 'Root');
+
+            expect(mockFsm.renameFile).toHaveBeenCalledWith(oldFile, 'test.mn/md/Renamed Root.md');
+            expect(mockFsm.renameFile).toHaveBeenCalledWith(oldFolder, 'test.mn/md/Renamed Root');
+            expect(node.filepath).toBe('Renamed Root.md');
+            expect(node.children[0].filepath).toBe('Renamed Root/C1.md');
         });
     });
 

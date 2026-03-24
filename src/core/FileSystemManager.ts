@@ -2,7 +2,7 @@
  * FileSystemManager
  * Manages all file operations with atomic guarantees using Obsidian's Vault API
  */
-import { App, TFile, TFolder, TAbstractFile, normalizePath, Notice } from 'obsidian';
+import { App, TFile, TFolder, TAbstractFile, normalizePath } from 'obsidian';
 
 import { MindNoteSettings } from '../types';
 
@@ -86,9 +86,9 @@ export class FileSystemManager {
     /**
      * Rename/move a file
      */
-    async renameFile(file: TFile, newPath: string): Promise<void> {
+    async renameFile(file: TAbstractFile, newPath: string): Promise<void> {
         const normalizedPath = normalizePath(newPath);
-        await this.app.fileManager.renameFile(file, normalizedPath);
+        await this.app.fileManager.renameFile(file as any, normalizedPath);
     }
 
     /**
