@@ -349,9 +349,8 @@ function MindMapFlowInner({
                     <Panel position="top-left">
                         <div
                             className="mindnote-context-menu menu"
-                            style={{ left: contextMenu.x, top: contextMenu.y, position: 'fixed', display: 'block' }}
+                            style={{ left: contextMenu.x, top: contextMenu.y, position: 'fixed' }}
                             onClick={(event) => event.stopPropagation()}
-                            onContextMenu={(event) => event.preventDefault()}
                             role="menu"
                             aria-label="Node context menu"
                         >

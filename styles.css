@@ -244,9 +244,7 @@
 
 .mindnote-context-menu {
   min-width: 180px;
-  z-index: 9999;
-  display: block !important;
-  pointer-events: auto;
+  z-index: 1000;
 }
 
 .mindnote-context-menu .menu-item {
