@@ -12,7 +12,7 @@ export interface UseClipboardProps {
     selectedNodeIds: Set<string>;
     setTreeData: React.Dispatch<React.SetStateAction<MindNode>>;
     onMapDataChange?: (data: MindMapData) => void;
-    onNodeCreate?: (node: MindNode, parentId: string) => void;
+    onNodeCreate?: (node: MindNode, parentId: string, fileType?: 'markdown' | 'canvas') => void;
     onPaste?: (files: File[], targetNodeId: string | null) => void;
     generateId: () => string;
 }

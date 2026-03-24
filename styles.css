@@ -126,6 +126,13 @@
   opacity: 0.8;
 }
 
+.mindmap-canvas-indicator {
+  font-size: 12px;
+  color: var(--text-accent);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
 /* Node image */
 .mindmap-node-image {
   max-width: 120px;
@@ -233,6 +240,19 @@
 
 .react-flow__controls-button.mindnote-compact-toggle.active svg {
   fill: var(--text-on-accent);
+}
+
+.mindnote-context-menu {
+  min-width: 180px;
+  z-index: 1000;
+}
+
+.mindnote-context-menu .menu-item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
 }
 
 /* ============================================================================

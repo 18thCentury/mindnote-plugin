@@ -14,6 +14,7 @@ export interface MindNode {
     id: string;
     topic: string;
     filepath: string;       // Relative path under md/ (e.g., "topic.md" or "Parent/topic.md")
+    fileType?: 'markdown' | 'canvas';
     children: MindNode[];
     expanded: boolean;
     isImage?: boolean;      // True if this is an image node

@@ -13,7 +13,7 @@ export interface UseMindMapTreeProps {
     mapData: MindMapData;
     onMapDataChange?: (data: MindMapData) => void;
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
-    onNodeCreate?: (node: MindNode, parentId: string) => void;
+    onNodeCreate?: (node: MindNode, parentId: string, fileType?: 'markdown' | 'canvas') => void;
     onNodeDelete?: (node: MindNode) => void;
 }
 
@@ -112,17 +112,18 @@ export function useMindMapTree({
     }, [selectedNodeIds, generateId, onMapDataChange]);
 
     // Add child to selected node
-    const addChild = useCallback(() => {
+    const addChild = useCallback((fileType: 'markdown' | 'canvas' = 'markdown', parentIdOverride?: string) => {
         const currentTree = treeDataRef.current;
-        const targetId = selectedNodeIds.size > 0
+        const targetId = parentIdOverride ?? (selectedNodeIds.size > 0
             ? Array.from(selectedNodeIds)[selectedNodeIds.size - 1]
-            : currentTree.id;
+            : currentTree.id);
 
         const parentId = targetId || currentTree.id;
         const newNode: MindNode = {
             id: generateId(),
-            topic: 'New Node',
+            topic: fileType === 'canvas' ? 'New Canvas' : 'New Node',
             filepath: '',
+            fileType,
             children: [],
             expanded: true,
         };
@@ -131,7 +132,7 @@ export function useMindMapTree({
         setTreeData(newTree);
         lastPushedDataRef.current = newTree;
         onMapDataChange?.({ nodeData: newTree });
-        onNodeCreate?.(newNode, parentId);
+        onNodeCreate?.(newNode, parentId, fileType);
 
         setSelectedNodeIds(new Set([newNode.id]));
         setTimeout(() => {
@@ -140,14 +141,15 @@ export function useMindMapTree({
     }, [selectedNodeIds, generateId, onMapDataChange, onNodeCreate]);
 
     // Delete selected node
-    const deleteSelected = useCallback(() => {
+    const deleteSelected = useCallback((targetIds?: Set<string>) => {
         const currentTree = treeDataRef.current;
-        if (selectedNodeIds.size === 0) return;
+        const idsToDelete = targetIds ?? selectedNodeIds;
+        if (idsToDelete.size === 0) return;
 
         let newTree = currentTree;
         const deletedNodes: MindNode[] = [];
 
-        selectedNodeIds.forEach(id => {
+        idsToDelete.forEach(id => {
             if (id === currentTree.id) return; // Can't delete root
             const nodeToDelete = findNodeInTree(newTree, id);
             if (nodeToDelete) {
