@@ -108,7 +108,12 @@ function MindMapNodeComponent(props: NodeProps) {
                         className="mindmap-node-image"
                     />
                 ) : (
-                    <span className="mindmap-node-topic">{nodeData.topic}</span>
+                    <>
+                        {nodeData.fileType === 'canvas' && (
+                            <span className="mindmap-canvas-indicator" title="Canvas node">◱</span>
+                        )}
+                        <span className="mindmap-node-topic">{nodeData.topic}</span>
+                    </>
                 )}
 
             </div>

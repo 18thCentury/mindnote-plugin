@@ -14,6 +14,7 @@ export class StateSynchronizer {
     private currentLeaf: WorkspaceLeaf | null = null;
     private mapData: MindMapData | null = null;
     private writeQueue: WriteQueue;
+    private readonly canvasDefaultContent = '{\n  "nodes": [],\n  "edges": []\n}';
     private fileEventUnsubscribe: (() => void) | null = null;
     private onContentChangeCallback: ((nodeId: string, hasContent: boolean) => void) | null = null;
 
@@ -242,10 +243,10 @@ export class StateSynchronizer {
     private async executeNodeCreate(node: MindNode): Promise<void> {
         const targetFolder = await this.getNodeMarkdownDirectory(node);
         const safeName = this.fsm.generateSafeName(node.topic, targetFolder);
-        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}.md`);
+        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}${this.getNodeExtension(node)}`);
         const filePath = normalizePath(`${this.getMdFolderPath()}/${relativePath}`);
 
-        await this.fsm.createFile(filePath, '');
+        await this.fsm.createFile(filePath, this.getDefaultFileContent(node));
         this.txManager.recordCreate(filePath);
 
         // Update node's filepath
@@ -275,14 +276,14 @@ export class StateSynchronizer {
 
         const parentDir = this.getParentDirectory(node.filepath);
         const safeName = this.fsm.generateSafeName(node.topic, parentDir, oldPath);
-        const newPath = normalizePath(`${parentDir}/${safeName}.md`);
+        const newPath = normalizePath(`${parentDir}/${safeName}${this.getNodeExtension(node)}`);
         const newRelativePath = this.toRelativeMdPath(newPath);
 
         if (oldPath !== newPath) {
             // If this node has descendants, close any open markdown under the folder to avoid lock/conflicts
             if (node.children && node.children.length > 0 && this.currentOpenNode) {
                 const currentOpenPath = normalizePath(`${this.getMdFolderPath()}/${this.currentOpenNode.filepath}`);
-                const oldFolderPath = this.stripMarkdownExtension(oldPath);
+                const oldFolderPath = this.stripNodeFileExtension(oldPath);
                 if (currentOpenPath === oldPath || currentOpenPath.startsWith(`${oldFolderPath}/`)) {
                     await this.closeCurrentMarkdown();
                 }
@@ -293,8 +294,8 @@ export class StateSynchronizer {
 
             node.filepath = newRelativePath;
 
-            const oldFolderPath = this.stripMarkdownExtension(oldPath);
-            const newFolderPath = this.stripMarkdownExtension(newPath);
+            const oldFolderPath = this.stripNodeFileExtension(oldPath);
+            const newFolderPath = this.stripNodeFileExtension(newPath);
 
             // If this node has children, rename its subtree folder as well
             if (node.children && node.children.length > 0) {
@@ -444,7 +445,7 @@ export class StateSynchronizer {
 
         // If no filepath exists or file missing, create the markdown file now
         if (!fileExists) {
-            await this.ensureNodeHasMarkdown(targetNode);
+            await this.ensureNodeHasBackingFile(targetNode);
 
             // Check for cancellation after async op
             if (this.openFileRequestId !== requestId) return;
@@ -452,7 +453,7 @@ export class StateSynchronizer {
 
         // Still no filepath? Something went wrong
         if (!targetNode.filepath) {
-            console.warn('MindNote: Could not create markdown file for node:', targetNode.id);
+            console.warn('MindNote: Could not create file for node:', targetNode.id);
             return;
         }
 
@@ -471,7 +472,7 @@ export class StateSynchronizer {
             // Check cancellation
             if (this.openFileRequestId !== requestId) return;
 
-            await this.fsm.createFile(filePath, '');
+            await this.fsm.createFile(filePath, this.getDefaultFileContent(targetNode));
             // Check cancellation
             if (this.openFileRequestId !== requestId) return;
 
@@ -513,16 +514,16 @@ export class StateSynchronizer {
     /**
      * Ensure a node has an associated markdown file, creating one if needed
      */
-    private async ensureNodeHasMarkdown(node: MindNode): Promise<void> {
+    private async ensureNodeHasBackingFile(node: MindNode): Promise<void> {
         const targetFolder = await this.getNodeMarkdownDirectory(node);
         const safeName = this.fsm.generateSafeName(node.topic, targetFolder);
-        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}.md`);
+        const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}${this.getNodeExtension(node)}`);
         const filePath = normalizePath(`${this.getMdFolderPath()}/${relativePath}`);
 
         // Create the file if it doesn't exist
         const existingFile = this.app.vault.getAbstractFileByPath(filePath);
         if (!(existingFile instanceof TFile)) {
-            await this.fsm.createFile(filePath, '');
+            await this.fsm.createFile(filePath, this.getDefaultFileContent(node));
         }
 
         // Update node's filepath
@@ -666,7 +667,7 @@ export class StateSynchronizer {
      */
     private async onExternalFileChange(file: TFile): Promise<void> {
         // Only process markdown files in the md folder
-        if (!this.mapData || !file.path.includes('/md/')) return;
+        if (!this.mapData || !file.path.includes('/md/') || !file.path.endsWith('.md')) return;
 
         const relativePath = this.toRelativeMdPath(file.path);
         const node = this.findNodeByFilepath(this.mapData.nodeData, relativePath);
@@ -764,7 +765,7 @@ export class StateSynchronizer {
         }
 
         const parentFilePath = normalizePath(`${mdFolder}/${parentNode.filepath}`);
-        const parentFolderPath = this.stripMarkdownExtension(parentFilePath);
+        const parentFolderPath = this.stripNodeFileExtension(parentFilePath);
         await this.fsm.ensureDirectory(parentFolderPath);
         return parentFolderPath;
     }
@@ -787,8 +788,18 @@ export class StateSynchronizer {
         return null;
     }
 
-    private stripMarkdownExtension(path: string): string {
-        return path.endsWith('.md') ? path.slice(0, -3) : path;
+    private stripNodeFileExtension(path: string): string {
+        if (path.endsWith('.canvas')) return path.slice(0, -7);
+        if (path.endsWith('.md')) return path.slice(0, -3);
+        return path;
+    }
+
+    private getNodeExtension(node: MindNode): '.md' | '.canvas' {
+        return node.fileType === 'canvas' ? '.canvas' : '.md';
+    }
+
+    private getDefaultFileContent(node: MindNode): string {
+        return node.fileType === 'canvas' ? this.canvasDefaultContent : '';
     }
 
     private getParentDirectory(filePath: string): string {
@@ -827,4 +838,3 @@ export class StateSynchronizer {
     }
 
 }
-
