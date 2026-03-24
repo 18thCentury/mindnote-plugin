@@ -28,7 +28,7 @@ describe('FileSystemManager', () => {
 
     beforeEach(() => {
         mockApp = createMockApp();
-        fsm = new FileSystemManager(mockApp as any);
+        fsm = new FileSystemManager(mockApp as any, () => ({ caseSensitiveFilenames: true } as any));
     });
 
     describe('sanitizeFilename', () => {
