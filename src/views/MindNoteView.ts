@@ -242,8 +242,8 @@ export class MindNoteView extends ItemView {
     /**
      * Handle node creation
      */
-    private handleNodeCreate(node: MindNode, _parentId: string, _fileType?: 'markdown' | 'canvas'): void {
-        this.synchronizer.onNodeCreated(node);
+    private handleNodeCreate(node: MindNode, parentId: string, _fileType?: 'markdown' | 'canvas'): void {
+        this.synchronizer.onNodeCreated(node, parentId);
     }
 
     /**
@@ -462,7 +462,7 @@ export class MindNoteView extends ItemView {
 
                 // Trigger creation hooks
                 if (!newNode.isImage) {
-                    this.synchronizer.onNodeCreated(newNode);
+                    this.synchronizer.onNodeCreated(newNode, parentNodeId);
                 }
 
                 // Render
