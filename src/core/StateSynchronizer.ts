@@ -187,8 +187,8 @@ export class StateSynchronizer {
     /**
      * Handle node creation - queue the operation
      */
-    onNodeCreated(node: MindNode): void {
-        this.writeQueue.enqueueCreate(node);
+    onNodeCreated(node: MindNode, parentId?: string): void {
+        this.writeQueue.enqueueCreate(node, parentId);
     }
 
     /**
@@ -222,7 +222,10 @@ export class StateSynchronizer {
     private async executeQueuedOperation(op: QueuedOperation): Promise<void> {
         switch (op.type) {
             case 'create':
-                await this.executeNodeCreate(op.data as MindNode);
+                {
+                    const createData = op.data as { node: MindNode; parentId?: string };
+                    await this.executeNodeCreate(createData.node, createData.parentId);
+                }
                 break;
             case 'rename':
                 const renameData = op.data as { node: MindNode; oldTopic: string };
@@ -240,8 +243,8 @@ export class StateSynchronizer {
     /**
      * Execute node creation
      */
-    private async executeNodeCreate(node: MindNode): Promise<void> {
-        const targetFolder = await this.getNodeMarkdownDirectory(node);
+    private async executeNodeCreate(node: MindNode, parentId?: string): Promise<void> {
+        const targetFolder = await this.getNodeMarkdownDirectory(node, parentId);
         const safeName = this.fsm.generateSafeName(node.topic, targetFolder);
         const relativePath = this.toRelativeMdPath(`${targetFolder}/${safeName}${this.getNodeExtension(node)}`);
         const filePath = normalizePath(`${this.getMdFolderPath()}/${relativePath}`);
@@ -751,7 +754,7 @@ export class StateSynchronizer {
         return folder instanceof TFolder ? folder : null;
     }
 
-    private async getNodeMarkdownDirectory(node: MindNode): Promise<string> {
+    private async getNodeMarkdownDirectory(node: MindNode, parentId?: string): Promise<string> {
         const mdFolder = this.getMdFolderPath();
         await this.fsm.ensureDirectory(mdFolder);
 
@@ -759,7 +762,9 @@ export class StateSynchronizer {
             return mdFolder;
         }
 
-        const parentNode = this.findParentNodeById(this.mapData.nodeData, node.id);
+        const parentNode = parentId
+            ? this.findNodeById(this.mapData.nodeData, parentId)
+            : this.findParentNodeById(this.mapData.nodeData, node.id);
         if (!parentNode || !parentNode.filepath) {
             return mdFolder;
         }

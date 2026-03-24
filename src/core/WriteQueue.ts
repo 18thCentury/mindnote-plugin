@@ -47,8 +47,8 @@ export class WriteQueue {
     /**
      * Enqueue a create operation
      */
-    enqueueCreate(node: MindNode): void {
-        this.enqueue('create', node.id, node);
+    enqueueCreate(node: MindNode, parentId?: string): void {
+        this.enqueue('create', node.id, { node, parentId });
     }
 
     /**
