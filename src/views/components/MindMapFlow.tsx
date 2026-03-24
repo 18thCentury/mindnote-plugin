@@ -48,7 +48,7 @@ export interface MindMapFlowProps {
     };
     contentMap: Map<string, boolean>;
     onNodeSelect?: (node: MindNode) => void;
-    onNodeCreate?: (node: MindNode, parentId: string) => void;
+    onNodeCreate?: (node: MindNode, parentId: string, fileType?: 'markdown' | 'canvas') => void;
     onNodeDelete?: (node: MindNode) => void;
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
     onMapDataChange?: (data: MindMapData) => void;
@@ -77,6 +77,7 @@ function MindMapFlowInner({
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
     // 1. Tree State & Operations
     const {
@@ -217,6 +218,7 @@ function MindMapFlowInner({
 
     // Handle node selection click
     const handleNodeClick: NodeMouseHandler = useCallback((event, node) => {
+        setContextMenu(null);
         const isMultiSelect = event.shiftKey || event.ctrlKey || event.metaKey;
 
         setSelectedNodeIds(prev => {
@@ -238,8 +240,57 @@ function MindMapFlowInner({
     }, [onNodeSelect, treeDataRef, setSelectedNodeIds]);
 
     const handlePaneClick = useCallback(() => {
+        setContextMenu(null);
         setSelectedNodeIds(new Set());
     }, [setSelectedNodeIds]);
+
+    const handleNodeContextMenu: NodeMouseHandler = useCallback((event, node) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setSelectedNodeIds(new Set([node.id]));
+        setContextMenu({ nodeId: node.id, x: event.clientX, y: event.clientY });
+    }, [setSelectedNodeIds]);
+
+    useEffect(() => {
+        if (!contextMenu) return;
+
+        const closeMenu = () => setContextMenu(null);
+        const handleEsc = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') closeMenu();
+        };
+        document.addEventListener('click', closeMenu);
+        document.addEventListener('contextmenu', closeMenu);
+        document.addEventListener('keydown', handleEsc);
+        return () => {
+            document.removeEventListener('click', closeMenu);
+            document.removeEventListener('contextmenu', closeMenu);
+            document.removeEventListener('keydown', handleEsc);
+        };
+    }, [contextMenu]);
+
+    const triggerEditSelectedNode = useCallback(() => {
+        const targetId = contextMenu?.nodeId;
+        if (!targetId) return;
+        setSelectedNodeIds(new Set([targetId]));
+        setEditTrigger({ id: targetId, ts: Date.now() });
+        setContextMenu(null);
+    }, [contextMenu?.nodeId, setEditTrigger, setSelectedNodeIds]);
+
+    const handleCreateChildFromContext = useCallback((fileType: 'markdown' | 'canvas') => {
+        const targetId = contextMenu?.nodeId;
+        if (!targetId) return;
+        setSelectedNodeIds(new Set([targetId]));
+        addChild(fileType, targetId);
+        setContextMenu(null);
+    }, [addChild, contextMenu?.nodeId, setSelectedNodeIds]);
+
+    const handleDeleteFromContext = useCallback(() => {
+        const targetId = contextMenu?.nodeId;
+        if (!targetId) return;
+        setSelectedNodeIds(new Set([targetId]));
+        deleteSelected(new Set([targetId]));
+        setContextMenu(null);
+    }, [contextMenu?.nodeId, deleteSelected, setSelectedNodeIds]);
 
     const handleDragOver = useCallback((event: React.DragEvent) => {
         event.preventDefault();
@@ -269,6 +320,7 @@ function MindMapFlowInner({
                 onEdgesChange={onEdgesChange}
                 nodeTypes={nodeTypes}
                 onNodeClick={handleNodeClick}
+                onNodeContextMenu={handleNodeContextMenu}
                 onPaneClick={handlePaneClick}
                 onNodeDragStart={handleNodeDragStart}
                 onNodeDrag={handleNodeDrag}
@@ -293,6 +345,31 @@ function MindMapFlowInner({
                     </ControlButton>
                 </Controls>
                 <MiniMap />
+                {contextMenu && (
+                    <Panel position="top-left">
+                        <div
+                            className="mindnote-context-menu menu"
+                            style={{ left: contextMenu.x, top: contextMenu.y, position: 'fixed' }}
+                            onClick={(event) => event.stopPropagation()}
+                            role="menu"
+                            aria-label="Node context menu"
+                        >
+                            <button className="menu-item" onClick={() => handleCreateChildFromContext('markdown')}>
+                                <span className="menu-item-title">新建子节点</span>
+                            </button>
+                            <button className="menu-item" onClick={() => handleCreateChildFromContext('canvas')}>
+                                <span className="menu-item-title">新建 Canvas 子节点</span>
+                            </button>
+                            <button className="menu-item" onClick={triggerEditSelectedNode}>
+                                <span className="menu-item-title">重命名节点</span>
+                            </button>
+                            <div className="menu-separator" />
+                            <button className="menu-item" onClick={handleDeleteFromContext}>
+                                <span className="menu-item-title">删除节点</span>
+                            </button>
+                        </div>
+                    </Panel>
+                )}
             </ReactFlow>
         </div>
     );

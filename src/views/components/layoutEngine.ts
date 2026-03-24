@@ -133,6 +133,7 @@ export function convertToFlowElements(
                 id: node.id,
                 topic: node.topic,
                 filepath: node.filepath,
+                fileType: node.fileType,
                 isImage: node.isImage,
                 imageUrl: imageUrl,
                 hasContent,

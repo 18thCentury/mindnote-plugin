@@ -22,6 +22,7 @@ export interface MindMapNodeData {
     id: string;
     topic: string;
     filepath: string;
+    fileType?: 'markdown' | 'canvas';
     isImage?: boolean;
     imageUrl?: string;
     hasContent?: boolean;
