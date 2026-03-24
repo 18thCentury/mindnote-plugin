@@ -16,7 +16,6 @@ import {
     type Edge,
     type NodeMouseHandler,
     SelectionMode,
-    Panel,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -345,32 +344,31 @@ function MindMapFlowInner({
                     </ControlButton>
                 </Controls>
                 <MiniMap />
-                {contextMenu && (
-                    <Panel position="top-left">
-                        <div
-                            className="mindnote-context-menu menu"
-                            style={{ left: contextMenu.x, top: contextMenu.y, position: 'fixed' }}
-                            onClick={(event) => event.stopPropagation()}
-                            role="menu"
-                            aria-label="Node context menu"
-                        >
-                            <button className="menu-item" onClick={() => handleCreateChildFromContext('markdown')}>
-                                <span className="menu-item-title">新建子节点</span>
-                            </button>
-                            <button className="menu-item" onClick={() => handleCreateChildFromContext('canvas')}>
-                                <span className="menu-item-title">新建 Canvas 子节点</span>
-                            </button>
-                            <button className="menu-item" onClick={triggerEditSelectedNode}>
-                                <span className="menu-item-title">重命名节点</span>
-                            </button>
-                            <div className="menu-separator" />
-                            <button className="menu-item" onClick={handleDeleteFromContext}>
-                                <span className="menu-item-title">删除节点</span>
-                            </button>
-                        </div>
-                    </Panel>
-                )}
+
             </ReactFlow>
+            {contextMenu && (
+                <div
+                    className="mindnote-context-menu menu"
+                    style={{ left: contextMenu.x, top: contextMenu.y, position: 'fixed' }}
+                    onClick={(event) => event.stopPropagation()}
+                    role="menu"
+                    aria-label="Node context menu"
+                >
+                    <button className="menu-item" type="button" onClick={() => handleCreateChildFromContext('markdown')}>
+                        <span className="menu-item-title">新建子节点</span>
+                    </button>
+                    <button className="menu-item" type="button" onClick={() => handleCreateChildFromContext('canvas')}>
+                        <span className="menu-item-title">新建 Canvas 子节点</span>
+                    </button>
+                    <button className="menu-item" type="button" onClick={triggerEditSelectedNode}>
+                        <span className="menu-item-title">重命名节点</span>
+                    </button>
+                    <div className="menu-separator" />
+                    <button className="menu-item" type="button" onClick={handleDeleteFromContext}>
+                        <span className="menu-item-title">删除节点</span>
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

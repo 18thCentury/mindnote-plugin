@@ -243,8 +243,13 @@
 }
 
 .mindnote-context-menu {
-  min-width: 180px;
+  min-width: 200px;
   z-index: 1000;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-s);
+  padding: 6px;
 }
 
 .mindnote-context-menu .menu-item {
@@ -253,6 +258,24 @@
   background: transparent;
   border: none;
   cursor: pointer;
+  color: var(--text-normal);
+  font: inherit;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+
+.mindnote-context-menu .menu-item:hover,
+.mindnote-context-menu .menu-item:focus-visible {
+  background: var(--background-modifier-hover);
+  outline: none;
+}
+
+.mindnote-context-menu .menu-separator {
+  margin: 4px -6px;
+  border-top: 1px solid var(--background-modifier-border);
 }
 
 /* ============================================================================
