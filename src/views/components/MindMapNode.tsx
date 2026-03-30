@@ -31,22 +31,26 @@ function MindMapNodeComponent(props: NodeProps) {
     useEffect(() => {
         if (nodeData.startEditTs && nodeData.startEditTs !== lastEditTsRef.current) {
             lastEditTsRef.current = nodeData.startEditTs;
+            setEditValue(nodeData.topic);
+            nodeData.onEditTopicChange?.(id, nodeData.topic);
             setIsEditing(true);
         }
-    }, [nodeData.startEditTs]);
+    }, [id, nodeData]);
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
         if (!nodeData.isImage) {
             setEditValue(nodeData.topic);
+            nodeData.onEditTopicChange?.(id, nodeData.topic);
             setIsEditing(true);
         }
-    }, [nodeData.isImage, nodeData.topic]);
+    }, [id, nodeData]);
 
     const handleBlur = useCallback(() => {
         if (isEditing && editValue.trim() !== nodeData.topic) {
             nodeData.onNodeRename?.(id, editValue.trim());
         }
+        nodeData.onEditTopicChange?.(id, undefined);
         setIsEditing(false);
     }, [isEditing, editValue, nodeData, id]);
 
@@ -59,9 +63,10 @@ function MindMapNodeComponent(props: NodeProps) {
         } else if (e.key === 'Escape') {
             e.stopPropagation();
             setEditValue(nodeData.topic);
+            nodeData.onEditTopicChange?.(id, undefined);
             setIsEditing(false);
         }
-    }, [handleBlur, nodeData.topic]);
+    }, [handleBlur, nodeData, id]);
 
     const handleToggleClick = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -96,7 +101,11 @@ function MindMapNodeComponent(props: NodeProps) {
                         ref={inputRef}
                         type="text"
                         value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
+                        onChange={(e) => {
+                            const newValue = e.target.value;
+                            setEditValue(newValue);
+                            nodeData.onEditTopicChange?.(id, newValue);
+                        }}
                         onBlur={handleBlur}
                         onKeyDown={handleKeyDown}
                         className="mindmap-node-input nodrag"

@@ -75,6 +75,7 @@ function MindMapFlowInner({
 }: MindMapFlowProps) {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+    const [liveTopicMap, setLiveTopicMap] = useState<Map<string, string>>(new Map());
     const containerRef = useRef<HTMLDivElement>(null);
     const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
@@ -162,6 +163,18 @@ function MindMapFlowInner({
         compact: isCompact,
     }), [settings, isCompact]);
 
+    const handleEditTopicChange = useCallback((nodeId: string, draftTopic?: string) => {
+        setLiveTopicMap(prev => {
+            const next = new Map(prev);
+            if (typeof draftTopic === 'string') {
+                next.set(nodeId, draftTopic);
+            } else {
+                next.delete(nodeId);
+            }
+            return next;
+        });
+    }, []);
+
     // Convert tree to flow elements whenever tree changes
     useEffect(() => {
         // Process image URLs for display
@@ -169,9 +182,11 @@ function MindMapFlowInner({
             treeData,
             layoutOptions,
             contentMap,
+            liveTopicMap,
             {
                 onToggleExpand: handleToggleExpand,
                 onNodeRename: handleNodeRename,
+                onEditTopicChange: handleEditTopicChange,
                 editTrigger: editTrigger,
                 resolveImageUrl: resolveImageUrl,
             }
@@ -194,11 +209,13 @@ function MindMapFlowInner({
         treeData,
         layoutOptions,
         contentMap,
+        liveTopicMap,
         setNodes,
         setEdges,
         resolveImageUrl,
         handleToggleExpand,
         handleNodeRename,
+        handleEditTopicChange,
         editTrigger,
         selectedNodeIds
     ]);

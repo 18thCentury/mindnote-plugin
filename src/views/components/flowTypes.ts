@@ -32,9 +32,11 @@ export interface MindMapNodeData {
     depth: number;
     onToggleExpand?: (nodeId: string) => void;
     onNodeRename?: (nodeId: string, newTopic: string) => void;
+    onEditTopicChange?: (nodeId: string, draftTopic?: string) => void;
     isDragging?: boolean;
     dropZone?: 'above' | 'child' | 'below' | null;
     startEditTs?: number;
+    draftTopic?: string;
 }
 
 export const DEFAULT_LAYOUT_OPTIONS: LayoutOptions = {
