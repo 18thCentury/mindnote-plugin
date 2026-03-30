@@ -6,21 +6,7 @@ import type { Node, Edge } from '@xyflow/react';
 import type { MindNode } from '../../types';
 import type { LayoutOptions, MindMapNodeData } from './flowTypes';
 import { DEFAULT_LAYOUT_OPTIONS } from './flowTypes';
-
-// Helper to get computed styles for measurement
-let measurementContainer: HTMLDivElement | null = null;
-
-function getMeasurementContainer(): HTMLDivElement {
-    if (!measurementContainer) {
-        measurementContainer = document.createElement('div');
-        measurementContainer.style.position = 'absolute';
-        measurementContainer.style.visibility = 'hidden';
-        measurementContainer.style.top = '-9999px';
-        measurementContainer.style.left = '-9999px';
-        document.body.appendChild(measurementContainer);
-    }
-    return measurementContainer;
-}
+import { prepare as preparePretext, layout as layoutPretext } from './pretextAdapter';
 
 function measureNodeDimensions(
     topic: string,
@@ -39,57 +25,29 @@ function measureNodeDimensions(
         };
     }
 
-    if (typeof document === 'undefined') {
-        // Fallback for non-DOM environments (like Vitest in Node)
-        return {
-            width: Math.max(80, topic.length * 8 + (hasContent ? 20 : 0)),
-            height: 40
-        };
-    }
+    // Pretext-style single-pass measurement with cached graphemes.
+    // Keep the sizing constants aligned with node visual styles.
+    const fontSize = options.fontSize ?? 14;
+    const fontWeight = isRoot ? 600 : 400;
+    const fontFamily = options.fontFamily ?? DEFAULT_LAYOUT_OPTIONS.fontFamily;
+    const fontShorthand = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    const prepared = preparePretext(topic, fontShorthand);
+    const lineHeight = Math.ceil(fontSize * 1.4);
+    const measuredText = layoutPretext(prepared, Number.POSITIVE_INFINITY, lineHeight);
 
-    const container = getMeasurementContainer();
-    const tempNode = document.createElement('div');
-    tempNode.className = `mindmap-node ${isRoot ? 'mindmap-node-root' : ''}`;
-    tempNode.style.width = 'max-content';
-    tempNode.style.display = 'inline-block';
-    tempNode.style.visibility = 'hidden';
-    tempNode.style.position = 'absolute';
+    // paddings + indicator + spacing + optional expand toggle allowance
+    const baseHorizontalPadding = 24; // 12px * 2
+    const contentIndicatorWidth = hasContent ? 18 : 0;
+    const childrenToggleAllowance = hasChildren ? 16 : 0;
+    const measuredWidth = measuredText.width + baseHorizontalPadding + contentIndicatorWidth + childrenToggleAllowance;
 
-    const content = document.createElement('div');
-    content.className = 'mindmap-node-content';
-    content.style.display = 'flex';
-    content.style.alignItems = 'center';
-    content.style.gap = '6px';
-
-    if (hasContent) {
-        const indicator = document.createElement('span');
-        indicator.className = 'mindmap-content-indicator';
-        indicator.textContent = '📝';
-        content.appendChild(indicator);
-    }
-
-    const topicSpan = document.createElement('span');
-    topicSpan.className = 'mindmap-node-topic';
-    topicSpan.textContent = topic;
-
-    content.appendChild(topicSpan);
-    tempNode.appendChild(content);
-    container.appendChild(tempNode);
-
-    const width = tempNode.offsetWidth;
-    const height = tempNode.offsetHeight;
-
-    container.removeChild(tempNode);
-
-    // Padding and safety margins: 
-    // Sync with styles.css: padding: 8px 12px; + 6px gap
-    // Adding extra for handles and toggle safely (reduced in compact mode)
+    // Padding and safety margins.
     const isCompact = !!options.compact;
     const widthPadding = isCompact ? 4 : 10;
     const heightPadding = isCompact ? 2 : 4;
     return {
-        width: Math.max(40, width + widthPadding),
-        height: Math.max(options.nodeHeight, height + heightPadding)
+        width: Math.max(40, Math.ceil(measuredWidth) + widthPadding),
+        height: Math.max(options.nodeHeight, lineHeight + 16 + heightPadding)
     };
 }
 
@@ -101,9 +59,17 @@ export function convertToFlowElements(
     root: MindNode,
     options: Partial<LayoutOptions> = {},
     contentMap: Map<string, boolean> = new Map(),
-    callbacks?: {
+    liveTopicMapOrCallbacks: Map<string, string> | {
         onToggleExpand?: (nodeId: string) => void;
         onNodeRename?: (nodeId: string, newTopic: string) => void;
+        onEditTopicChange?: (nodeId: string, draftTopic?: string) => void;
+        editTrigger?: { id: string; ts: number } | null;
+        resolveImageUrl?: (relativePath: string) => string;
+    } = new Map(),
+    callbacksArg?: {
+        onToggleExpand?: (nodeId: string) => void;
+        onNodeRename?: (nodeId: string, newTopic: string) => void;
+        onEditTopicChange?: (nodeId: string, draftTopic?: string) => void;
         editTrigger?: { id: string; ts: number } | null;
         resolveImageUrl?: (relativePath: string) => string;
     }
@@ -111,6 +77,8 @@ export function convertToFlowElements(
     const opts = { ...DEFAULT_LAYOUT_OPTIONS, ...options };
     const nodes: Node<MindMapNodeData>[] = [];
     const edges: Edge[] = [];
+    const liveTopicMap = liveTopicMapOrCallbacks instanceof Map ? liveTopicMapOrCallbacks : new Map<string, string>();
+    const callbacks = liveTopicMapOrCallbacks instanceof Map ? callbacksArg : liveTopicMapOrCallbacks;
 
     function traverse(node: MindNode, depth: number = 0, parentId?: string): void {
         const hasChildren = node.children && node.children.length > 0;
@@ -132,6 +100,7 @@ export function convertToFlowElements(
             data: {
                 id: node.id,
                 topic: node.topic,
+                draftTopic: liveTopicMap.get(node.id),
                 filepath: node.filepath,
                 fileType: node.fileType,
                 isImage: node.isImage,
@@ -143,6 +112,7 @@ export function convertToFlowElements(
                 depth,
                 onToggleExpand: callbacks?.onToggleExpand,
                 onNodeRename: callbacks?.onNodeRename,
+                onEditTopicChange: callbacks?.onEditTopicChange,
                 startEditTs: callbacks?.editTrigger?.id === node.id ? callbacks.editTrigger.ts : undefined,
             },
         });
@@ -338,7 +308,7 @@ function applyTreeLayout(
     const nodeDims = new Map<string, { width: number, height: number }>();
     nodes.forEach(node => {
         const dims = measureNodeDimensions(
-            node.data.topic,
+            (typeof node.data.draftTopic === 'string' ? node.data.draftTopic : node.data.topic) as string,
             !!node.data.isImage,
             !!node.data.isRoot,
             !!node.data.hasContent,
