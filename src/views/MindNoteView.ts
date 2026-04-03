@@ -213,6 +213,7 @@ export class MindNoteView extends ItemView {
             onNodeCreate: this.handleNodeCreate.bind(this),
             onNodeDelete: this.handleNodeDelete.bind(this),
             onNodeRename: this.handleNodeRename.bind(this),
+            onNodeMove: this.handleNodeMove.bind(this),
             onMapDataChange: this.handleMapDataChange.bind(this),
             onDrop: this.handleDrop.bind(this),
             onPaste: this.handlePaste.bind(this),
@@ -258,6 +259,13 @@ export class MindNoteView extends ItemView {
      */
     private handleNodeRename(node: MindNode, oldTopic: string): void {
         this.synchronizer.onNodeRenamed(node, oldTopic);
+    }
+
+    /**
+     * Handle node move
+     */
+    private handleNodeMove(node: MindNode, oldParentId: string, newParentId: string): void {
+        this.synchronizer.onNodeMoved(node, oldParentId, newParentId);
     }
 
     /**
