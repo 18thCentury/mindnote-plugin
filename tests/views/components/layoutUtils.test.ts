@@ -219,6 +219,70 @@ describe('layoutUtils', () => {
             expect(childA1?.position.x).not.toBe(childB1?.position.x);
         });
 
+
+        it('should account for canvas icon width when file type indicator is visible', () => {
+            const treeWithCanvasChild: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'canvas-child',
+                        topic: 'Same Topic',
+                        filepath: 'canvas.canvas',
+                        fileType: 'canvas',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const treeWithMarkdownChild: MindNode = {
+                ...treeWithCanvasChild,
+                children: [
+                    {
+                        id: 'markdown-child',
+                        topic: 'Same Topic',
+                        filepath: 'same.md',
+                        fileType: 'markdown',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+            };
+
+            const canvasNode = convertToFlowElements(treeWithCanvasChild).nodes.find(n => n.id === 'canvas-child');
+            const markdownNode = convertToFlowElements(treeWithMarkdownChild).nodes.find(n => n.id === 'markdown-child');
+
+            expect((canvasNode?.style?.width as number) ?? 0).toBeGreaterThan((markdownNode?.style?.width as number) ?? 0);
+        });
+
+        it('should reserve space for empty draft topics while editing', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'child',
+                        topic: 'Non-empty',
+                        filepath: 'child.md',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const liveTopicMap = new Map<string, string>([['child', '']]);
+            const { nodes } = convertToFlowElements(tree, {}, new Map(), liveTopicMap);
+            const childNode = nodes.find(n => n.id === 'child');
+
+            expect((childNode?.style?.width as number) ?? 0).toBeGreaterThanOrEqual(40);
+            expect((childNode?.style?.height as number) ?? 0).toBeGreaterThan(0);
+        });
+
         it('should maintain consistent horizontal gaps', () => {
             const horizontalGap = 60;
             const tree: MindNode = {
