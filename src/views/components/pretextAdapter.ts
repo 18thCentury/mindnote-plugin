@@ -1,21 +1,14 @@
-/**
- * Lightweight pretext-compatible adapter used by MindNote.
- *
- * Why adapter instead of direct dependency:
- * - runtime environment currently cannot fetch npm/github packages reliably
- * - keep an API shape close to @chenglou/pretext (prepare + layout hot path)
- *
- * Scope of this adapter:
- * - supports node-label measurement (single-line + hard breaks)
- * - exposes pure arithmetic layout over prepared cached widths
- */
+import {
+    prepareWithSegments,
+    walkLineRanges,
+    layout as pretextLayout,
+    type PreparedTextWithSegments,
+} from '@chenglou/pretext';
 
 export interface PreparedText {
+    prepared: PreparedTextWithSegments | null;
     text: string;
     font: string;
-    graphemes: string[];
-    graphemeWidths: number[];
-    totalWidth: number;
 }
 
 export interface LayoutResult {
@@ -24,99 +17,72 @@ export interface LayoutResult {
     lineCount: number;
 }
 
-let measurementCanvasContext: CanvasRenderingContext2D | null = null;
-const graphemeWidthCache = new Map<string, number>();
 const preparedCache = new Map<string, PreparedText>();
 
-function getMeasurementContext(): CanvasRenderingContext2D | null {
-    if (measurementCanvasContext) return measurementCanvasContext;
-    if (typeof document === 'undefined') return null;
-
-    const canvas = document.createElement('canvas');
-    measurementCanvasContext = canvas.getContext('2d');
-    return measurementCanvasContext;
+function normalizeText(text: string): string {
+    return text.length === 0 ? ' ' : text;
 }
 
-function splitGraphemes(text: string): string[] {
-    const intlWithSegmenter = Intl as typeof Intl & { Segmenter?: any };
-    if (typeof Intl !== 'undefined' && intlWithSegmenter.Segmenter) {
-        const segmenter = new intlWithSegmenter.Segmenter(undefined, { granularity: 'grapheme' });
-        return Array.from(segmenter.segment(text), s => s.segment);
-    }
-    return Array.from(text);
-}
-
-function measureGrapheme(ctx: CanvasRenderingContext2D | null, grapheme: string, font: string): number {
-    if (!ctx) return grapheme.length * 8;
-    const cacheKey = `${font}::${grapheme}`;
-    const cached = graphemeWidthCache.get(cacheKey);
-    if (cached !== undefined) return cached;
-
-    ctx.font = font;
-    const measured = ctx.measureText(grapheme).width;
-    graphemeWidthCache.set(cacheKey, measured);
-    return measured;
+function fallbackLayout(text: string, lineHeight: number): LayoutResult {
+    const safeText = normalizeText(text);
+    const lines = safeText.split('\n');
+    const estimatedWidth = Math.max(...lines.map(line => line.length * 8));
+    const lineCount = Math.max(1, lines.length);
+    return {
+        width: estimatedWidth,
+        height: lineCount * lineHeight,
+        lineCount,
+    };
 }
 
 export function prepare(text: string, font: string): PreparedText {
-    const normalizedText = text || ' ';
+    const normalizedText = normalizeText(text);
     const cacheKey = `${font}__${normalizedText}`;
     const cached = preparedCache.get(cacheKey);
     if (cached) return cached;
 
-    const ctx = getMeasurementContext();
-    const graphemes = splitGraphemes(normalizedText);
-    const graphemeWidths = graphemes.map(g => measureGrapheme(ctx, g, font));
-    const totalWidth = graphemeWidths.reduce((sum, w) => sum + w, 0);
+    let prepared: PreparedTextWithSegments | null = null;
+    try {
+        prepared = prepareWithSegments(normalizedText, font);
+    } catch {
+        prepared = null;
+    }
 
-    const prepared: PreparedText = {
+    const result: PreparedText = {
+        prepared,
         text: normalizedText,
         font,
-        graphemes,
-        graphemeWidths,
-        totalWidth,
     };
-    preparedCache.set(cacheKey, prepared);
-    return prepared;
+    preparedCache.set(cacheKey, result);
+    return result;
 }
 
-/**
- * Similar to pretext layout hot path: pure arithmetic line breaking over prepared widths.
- */
 export function layout(prepared: PreparedText, maxWidth: number, lineHeight: number): LayoutResult {
-    if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
-        return { width: prepared.totalWidth, height: lineHeight, lineCount: 1 };
+    if (!prepared.prepared || !Number.isFinite(maxWidth) || maxWidth <= 0) {
+        return fallbackLayout(prepared.text, lineHeight);
     }
 
-    let lineWidth = 0;
-    let maxLineWidth = 0;
-    let lineCount = 1;
+    try {
+        const layoutResult = pretextLayout(prepared.prepared, maxWidth, lineHeight);
+        let maxLineWidth = 0;
+        walkLineRanges(prepared.prepared, maxWidth, line => {
+            if (line.width > maxLineWidth) {
+                maxLineWidth = line.width;
+            }
+        });
 
-    for (let i = 0; i < prepared.graphemes.length; i++) {
-        const g = prepared.graphemes[i];
-        const w = prepared.graphemeWidths[i];
-
-        if (g === '\n') {
-            maxLineWidth = Math.max(maxLineWidth, lineWidth);
-            lineWidth = 0;
-            lineCount += 1;
-            continue;
-        }
-
-        if (lineWidth + w > maxWidth && lineWidth > 0) {
-            maxLineWidth = Math.max(maxLineWidth, lineWidth);
-            lineWidth = w;
-            lineCount += 1;
-            continue;
-        }
-
-        lineWidth += w;
+        return {
+            width: maxLineWidth,
+            height: layoutResult.height,
+            lineCount: layoutResult.lineCount,
+        };
+    } catch {
+        return fallbackLayout(prepared.text, lineHeight);
     }
+}
 
-    maxLineWidth = Math.max(maxLineWidth, lineWidth);
-    return {
-        width: maxLineWidth,
-        height: lineCount * lineHeight,
-        lineCount,
-    };
+export function measureNaturalTextWidth(text: string, font: string): number {
+    const prepared = prepare(text, font);
+    const { width } = layout(prepared, Number.MAX_SAFE_INTEGER, 1);
+    return width;
 }

@@ -7,55 +7,12 @@ import type { MindNode } from '../../types';
 import type { LayoutOptions, MindMapNodeData } from './flowTypes';
 import { DEFAULT_LAYOUT_OPTIONS } from './flowTypes';
 
-/**
- * Pretext-style text measurement:
- * - Uses CanvasRenderingContext2D.measureText for precise glyph width
- * - Splits text into graphemes so CJK/emoji widths are handled correctly
- * - Caches per-font/per-grapheme widths to keep layout recalculation cheap
- */
-let measurementCanvasContext: CanvasRenderingContext2D | null = null;
-const graphemeWidthCache = new Map<string, number>();
+import { measureNaturalTextWidth, prepare, layout } from './pretextAdapter';
 
-function getMeasurementContext(): CanvasRenderingContext2D | null {
-    if (measurementCanvasContext) return measurementCanvasContext;
-    if (typeof document === 'undefined') return null;
-
-    const canvas = document.createElement('canvas');
-    measurementCanvasContext = canvas.getContext('2d');
-    return measurementCanvasContext;
-}
-
-function splitGraphemes(text: string): string[] {
-    const intlWithSegmenter = Intl as typeof Intl & { Segmenter?: any };
-    if (typeof Intl !== 'undefined' && intlWithSegmenter.Segmenter) {
-        const segmenter = new intlWithSegmenter.Segmenter(undefined, { granularity: 'grapheme' });
-        return Array.from(segmenter.segment(text), s => s.segment);
-    }
-    return Array.from(text);
-}
-
-function measureTopicTextPretext(topic: string, font: string): number {
-    const ctx = getMeasurementContext();
-    if (!ctx) {
-        return topic.length * 8;
-    }
-
-    ctx.font = font;
-    let width = 0;
-    for (const grapheme of splitGraphemes(topic || ' ')) {
-        const cacheKey = `${font}::${grapheme}`;
-        const cached = graphemeWidthCache.get(cacheKey);
-        if (cached !== undefined) {
-            width += cached;
-            continue;
-        }
-
-        const measured = ctx.measureText(grapheme).width;
-        graphemeWidthCache.set(cacheKey, measured);
-        width += measured;
-    }
-
-    return width;
+function measureTopicTextPretext(topic: string, font: string, lineHeight: number): { width: number, height: number } {
+    const prepared = prepare(topic, font);
+    const result = layout(prepared, Number.MAX_SAFE_INTEGER, lineHeight);
+    return { width: result.width, height: result.height };
 }
 
 function measureNodeDimensions(
@@ -64,6 +21,7 @@ function measureNodeDimensions(
     isRoot: boolean,
     hasContent: boolean,
     hasChildren: boolean,
+    showFileTypeIcon: boolean,
     options: LayoutOptions
 ): { width: number, height: number } {
     if (isImage) {
@@ -80,14 +38,18 @@ function measureNodeDimensions(
     const fontSize = options.fontSize ?? 14;
     const fontWeight = isRoot ? 600 : 400;
     const fontFamily = options.fontFamily ?? DEFAULT_LAYOUT_OPTIONS.fontFamily;
-    const topicWidth = measureTopicTextPretext(topic, `${fontWeight} ${fontSize}px ${fontFamily}`);
     const lineHeight = Math.ceil(fontSize * 1.4);
+    const font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    const { width: topicWidth, height: topicHeight } = measureTopicTextPretext(topic, font, lineHeight);
 
-    // paddings + indicator + spacing + optional expand toggle allowance
+    // paddings + indicator + optional canvas-file icon + optional expand toggle allowance
     const baseHorizontalPadding = 24; // 12px * 2
     const contentIndicatorWidth = hasContent ? 18 : 0;
+    const fileTypeIconWidth = showFileTypeIcon
+        ? Math.ceil(measureNaturalTextWidth('◱', font)) + 4 // icon glyph + css margin-right
+        : 0;
     const childrenToggleAllowance = hasChildren ? 16 : 0;
-    const measuredWidth = topicWidth + baseHorizontalPadding + contentIndicatorWidth + childrenToggleAllowance;
+    const measuredWidth = topicWidth + baseHorizontalPadding + contentIndicatorWidth + fileTypeIconWidth + childrenToggleAllowance;
 
     // Padding and safety margins.
     const isCompact = !!options.compact;
@@ -95,7 +57,7 @@ function measureNodeDimensions(
     const heightPadding = isCompact ? 2 : 4;
     return {
         width: Math.max(40, Math.ceil(measuredWidth) + widthPadding),
-        height: Math.max(options.nodeHeight, lineHeight + 16 + heightPadding)
+        height: Math.max(options.nodeHeight, Math.ceil(topicHeight) + 16 + heightPadding)
     };
 }
 
@@ -361,6 +323,7 @@ function applyTreeLayout(
             !!node.data.isRoot,
             !!node.data.hasContent,
             !!node.data.hasChildren,
+            node.data.fileType === 'canvas' && !node.data.isImage,
             options
         );
         nodeDims.set(node.id, dims);
