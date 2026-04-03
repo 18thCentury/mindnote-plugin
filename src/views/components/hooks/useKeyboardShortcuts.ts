@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 export interface UseKeyboardShortcutsProps {
     containerElement: HTMLElement | null;
@@ -63,6 +63,12 @@ export function useKeyboardShortcuts({
     undo,
     redo,
 }: UseKeyboardShortcutsProps) {
+    const selectedNodeIdsRef = useRef(selectedNodeIds);
+
+    useEffect(() => {
+        selectedNodeIdsRef.current = selectedNodeIds;
+    }, [selectedNodeIds]);
+
     useEffect(() => {
         let isActiveMap = false;
 
@@ -83,6 +89,10 @@ export function useKeyboardShortcuts({
         };
 
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (!isActiveMap && containerElement?.contains(document.activeElement)) {
+                isActiveMap = true;
+            }
+
             if (!isActiveMap) {
                 return;
             }
@@ -129,7 +139,7 @@ export function useKeyboardShortcuts({
                         }
                         break;
                     case ' ': { // Space
-                        const targetId = getLastSelectedNodeId(selectedNodeIds);
+                        const targetId = getLastSelectedNodeId(selectedNodeIdsRef.current);
                         if (!targetId) {
                             break;
                         }
@@ -144,7 +154,7 @@ export function useKeyboardShortcuts({
                         break;
                     case 'Backspace':
                     case 'Delete':
-                        if (selectedNodeIds.size === 0) {
+                        if (selectedNodeIdsRef.current.size === 0) {
                             break;
                         }
 
@@ -152,12 +162,12 @@ export function useKeyboardShortcuts({
                         deleteSelected();
                         break;
                     case '/': // Expand/Collapse
-                        if (selectedNodeIds.size === 0) {
+                        if (selectedNodeIdsRef.current.size === 0) {
                             break;
                         }
 
                         e.preventDefault();
-                        selectedNodeIds.forEach(id => handleToggleExpand(id));
+                        selectedNodeIdsRef.current.forEach(id => handleToggleExpand(id));
                         break;
                 }
             }
@@ -173,7 +183,6 @@ export function useKeyboardShortcuts({
         };
     }, [
         containerElement,
-        selectedNodeIds,
         copyNode,
         cutNode,
         pasteNode,
