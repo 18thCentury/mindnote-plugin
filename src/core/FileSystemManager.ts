@@ -88,7 +88,7 @@ export class FileSystemManager {
      */
     async renameFile(file: TAbstractFile, newPath: string): Promise<void> {
         const normalizedPath = normalizePath(newPath);
-        await this.app.fileManager.renameFile(file as any, normalizedPath);
+        await this.app.fileManager.renameFile(file, normalizedPath);
     }
 
     /**
@@ -115,33 +115,36 @@ export class FileSystemManager {
      * Save an image to the bundle's img/ folder
      */
     async saveImage(bundlePath: string, data: ArrayBuffer, name: string): Promise<string> {
-        const imgFolder = normalizePath(`${bundlePath}/img`);
-        await this.ensureDirectory(imgFolder);
-
-        const safeName = this.generateSafeResourceName(name, imgFolder);
-        const filePath = normalizePath(`${imgFolder}/${safeName}`);
-
-        await this.app.vault.createBinary(filePath, data);
-        return `img/${safeName}`;
+        return this.saveBinaryResource(bundlePath, 'img', data, name);
     }
 
     /**
      * Save a resource to the bundle's file/ folder
      */
     async saveResource(bundlePath: string, data: ArrayBuffer, name: string): Promise<string> {
-        const fileFolder = normalizePath(`${bundlePath}/file`);
-        await this.ensureDirectory(fileFolder);
-
-        const safeName = this.generateSafeResourceName(name, fileFolder);
-        const filePath = normalizePath(`${fileFolder}/${safeName}`);
-
-        await this.app.vault.createBinary(filePath, data);
-        return `file/${safeName}`;
+        return this.saveBinaryResource(bundlePath, 'file', data, name);
     }
 
     // ============================================================================
     // Query Operations
     // ============================================================================
+
+
+    private async saveBinaryResource(
+        bundlePath: string,
+        folderName: 'img' | 'file',
+        data: ArrayBuffer,
+        name: string
+    ): Promise<string> {
+        const targetFolder = normalizePath(`${bundlePath}/${folderName}`);
+        await this.ensureDirectory(targetFolder);
+
+        const safeName = this.generateSafeResourceName(name, targetFolder);
+        const filePath = normalizePath(`${targetFolder}/${safeName}`);
+
+        await this.app.vault.createBinary(filePath, data);
+        return `${folderName}/${safeName}`;
+    }
 
     /**
      * Check if a path exists

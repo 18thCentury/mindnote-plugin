@@ -3,23 +3,18 @@
  * Validates and executes node moves within the tree
  */
 import type { MindNode } from '../../types';
-import { findNodeInTree, findParentNode, removeNode, addChildNode } from './treeOperations';
+import { addChildNode, addSiblingNode, findNodeInTree, findParentNode, removeNode } from './treeOperations';
 
 /**
  * Check if a node is a descendant of another node
  */
 function isDescendant(root: MindNode, ancestorId: string, descendantId: string): boolean {
-    if (root.id === ancestorId) {
-        return findNodeInTree(root, descendantId) !== null;
+    const ancestorNode = findNodeInTree(root, ancestorId);
+    if (!ancestorNode) {
+        return false;
     }
-    if (root.children) {
-        for (const child of root.children) {
-            if (isDescendant(child, ancestorId, descendantId)) {
-                return true;
-            }
-        }
-    }
-    return false;
+
+    return findNodeInTree(ancestorNode, descendantId) !== null;
 }
 
 /**
@@ -78,102 +73,34 @@ export function moveNodeAsChild(root: MindNode, nodeId: string, targetId: string
     return addChildNode(treeWithoutNode, targetId, nodeToMove);
 }
 
-/**
- * Move a node to become a sibling above the target node
- */
-export function moveNodeAsSiblingAbove(root: MindNode, nodeId: string, targetId: string): MindNode {
+function moveNodeAsSibling(root: MindNode, nodeId: string, targetId: string, direction: 'above' | 'below'): MindNode {
     if (!canMoveNode(root, nodeId, targetId, 'sibling')) {
         return root;
     }
 
-    // Find the node to move
     const nodeToMove = findNodeInTree(root, nodeId);
-    if (!nodeToMove) return root;
-
-    // Find target's parent
-    const targetParent = findParentNode(root, targetId);
-    if (!targetParent) return root;
-
-    // Remove node from its current location
-    const treeWithoutNode = removeNode(root, nodeId);
-    if (!treeWithoutNode) return root;
-
-    // Insert node above target in parent's children array
-    const parentId = targetParent.id;
-    const safeTree: MindNode = treeWithoutNode;
-    function insertAbove(node: MindNode): MindNode {
-        if (node.id === parentId) {
-            const targetIndex = node.children.findIndex(child => child.id === targetId);
-            if (targetIndex === -1) return node;
-
-            const newChildren = [...node.children];
-            newChildren.splice(targetIndex, 0, nodeToMove!);
-
-            return {
-                ...node,
-                children: newChildren,
-            };
-        }
-
-        if (node.children) {
-            return {
-                ...node,
-                children: node.children.map(child => insertAbove(child)),
-            };
-        }
-
-        return node;
+    if (!nodeToMove) {
+        return root;
     }
 
-    return insertAbove(safeTree);
+    const treeWithoutNode = removeNode(root, nodeId);
+    if (!treeWithoutNode) {
+        return root;
+    }
+
+    return addSiblingNode(treeWithoutNode, targetId, nodeToMove, direction);
+}
+
+/**
+ * Move a node to become a sibling above the target node
+ */
+export function moveNodeAsSiblingAbove(root: MindNode, nodeId: string, targetId: string): MindNode {
+    return moveNodeAsSibling(root, nodeId, targetId, 'above');
 }
 
 /**
  * Move a node to become a sibling below the target node
  */
 export function moveNodeAsSiblingBelow(root: MindNode, nodeId: string, targetId: string): MindNode {
-    if (!canMoveNode(root, nodeId, targetId, 'sibling')) {
-        return root;
-    }
-
-    // Find the node to move
-    const nodeToMove = findNodeInTree(root, nodeId);
-    if (!nodeToMove) return root;
-
-    // Find target's parent
-    const targetParent = findParentNode(root, targetId);
-    if (!targetParent) return root;
-
-    // Remove node from its current location
-    const treeWithoutNode = removeNode(root, nodeId);
-    if (!treeWithoutNode) return root;
-
-    // Insert node below target in parent's children array
-    const parentId = targetParent.id;
-    const safeTree: MindNode = treeWithoutNode;
-    function insertBelow(node: MindNode): MindNode {
-        if (node.id === parentId) {
-            const targetIndex = node.children.findIndex(child => child.id === targetId);
-            if (targetIndex === -1) return node;
-
-            const newChildren = [...node.children];
-            newChildren.splice(targetIndex + 1, 0, nodeToMove!);
-
-            return {
-                ...node,
-                children: newChildren,
-            };
-        }
-
-        if (node.children) {
-            return {
-                ...node,
-                children: node.children.map(child => insertBelow(child)),
-            };
-        }
-
-        return node;
-    }
-
-    return insertBelow(safeTree);
+    return moveNodeAsSibling(root, nodeId, targetId, 'below');
 }

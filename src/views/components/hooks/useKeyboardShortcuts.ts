@@ -14,6 +14,40 @@ export interface UseKeyboardShortcutsProps {
     redo: () => void;
 }
 
+
+function getLastSelectedNodeId(selectedNodeIds: Set<string>): string | null {
+    if (selectedNodeIds.size === 0) {
+        return null;
+    }
+
+    return Array.from(selectedNodeIds)[selectedNodeIds.size - 1] ?? null;
+}
+
+function isTypingContext(target: EventTarget | null): boolean {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        return true;
+    }
+    if (activeElement instanceof HTMLElement && activeElement.isContentEditable) {
+        return true;
+    }
+
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        return true;
+    }
+
+    if (target instanceof HTMLElement) {
+        if (target.isContentEditable) {
+            return true;
+        }
+        if (target.closest('[contenteditable="true"]')) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 export function useKeyboardShortcuts({
     selectedNodeIds,
     copyNode,
@@ -29,12 +63,7 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsProps) {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Check if we're in an input field (native check)
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-                return;
-            }
-            // Check if contentEditable (just in case)
-            if ((e.target as HTMLElement).isContentEditable) {
+            if (isTypingContext(e.target)) {
                 return;
             }
 
@@ -47,6 +76,10 @@ export function useKeyboardShortcuts({
                         } else {
                             undo();
                         }
+                        break;
+                    case 'y':
+                        e.preventDefault();
+                        redo();
                         break;
                     case 'c':
                         e.preventDefault();
@@ -71,28 +104,36 @@ export function useKeyboardShortcuts({
                             addSibling('below');
                         }
                         break;
-                    case ' ': // Space
-                        e.preventDefault();
-                        if (selectedNodeIds.size > 0) {
-                            const targetId = Array.from(selectedNodeIds)[selectedNodeIds.size - 1];
-                            setEditTrigger({ id: targetId, ts: Date.now() });
+                    case ' ': { // Space
+                        const targetId = getLastSelectedNodeId(selectedNodeIds);
+                        if (!targetId) {
+                            break;
                         }
+
+                        e.preventDefault();
+                        setEditTrigger({ id: targetId, ts: Date.now() });
                         break;
+                    }
                     case 'Tab':
                         e.preventDefault();
                         addChild();
                         break;
                     case 'Backspace':
                     case 'Delete':
-                        // Only delete if NOT in input (already checked above)
+                        if (selectedNodeIds.size === 0) {
+                            break;
+                        }
+
                         e.preventDefault();
                         deleteSelected();
                         break;
                     case '/': // Expand/Collapse
-                        e.preventDefault();
-                        if (selectedNodeIds.size > 0) {
-                            selectedNodeIds.forEach(id => handleToggleExpand(id));
+                        if (selectedNodeIds.size === 0) {
+                            break;
                         }
+
+                        e.preventDefault();
+                        selectedNodeIds.forEach(id => handleToggleExpand(id));
                         break;
                 }
             }
