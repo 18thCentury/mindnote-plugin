@@ -131,6 +131,86 @@ describe('layoutUtils', () => {
             expect(child1?.data.hasContent).toBe(false);
         });
 
+        it('should measure empty topic using a visible space width and keep positive height', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: '',
+                filepath: 'root.md',
+                children: [],
+                expanded: true,
+            };
+
+            const { nodes } = convertToFlowElements(tree);
+            const root = nodes.find(n => n.id === 'root')!;
+
+            expect((root.style?.width as number)).toBeGreaterThan(0);
+            expect((root.style?.height as number)).toBeGreaterThan(0);
+        });
+
+        it('should include canvas indicator icon width when node is not editing', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'canvasNode',
+                        topic: 'A',
+                        filepath: 'canvas.canvas',
+                        fileType: 'canvas',
+                        children: [],
+                        expanded: true,
+                    },
+                    {
+                        id: 'normalNode',
+                        topic: 'A',
+                        filepath: 'normal.md',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const { nodes } = convertToFlowElements(tree);
+            const canvasNode = nodes.find(n => n.id === 'canvasNode')!;
+            const normalNode = nodes.find(n => n.id === 'normalNode')!;
+
+            expect((canvasNode.style?.width as number)).toBeGreaterThan((normalNode.style?.width as number));
+        });
+
+        it('should shrink canvas icon allowance while node is being edited', () => {
+            const tree: MindNode = {
+                id: 'root',
+                topic: 'Root',
+                filepath: 'root.md',
+                children: [
+                    {
+                        id: 'canvasNode',
+                        topic: 'A',
+                        filepath: 'canvas.canvas',
+                        fileType: 'canvas',
+                        children: [],
+                        expanded: true,
+                    },
+                ],
+                expanded: true,
+            };
+
+            const normal = convertToFlowElements(tree);
+            const editing = convertToFlowElements(
+                tree,
+                {},
+                new Map(),
+                new Map([['canvasNode', 'AA']])
+            );
+
+            const normalCanvas = normal.nodes.find(n => n.id === 'canvasNode')!;
+            const editingCanvas = editing.nodes.find(n => n.id === 'canvasNode')!;
+
+            expect((normalCanvas.style?.width as number)).toBeGreaterThan((editingCanvas.style?.width as number));
+        });
+
         it('should pass callbacks through node data', () => {
             const tree = createSampleTree();
             const onToggleExpand = () => { };
