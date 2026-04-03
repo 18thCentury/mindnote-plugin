@@ -2,7 +2,7 @@
  * MindMapFlow - Main React Flow component for the mindmap
  * Handles rendering, interactions, and clipboard operations
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ReactFlow,
     Background,
@@ -76,7 +76,7 @@ function MindMapFlowInner({
     const [nodes, setNodes, onNodesChange] = useNodesState<Node<MindMapNodeData>>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
     const [liveTopicMap, setLiveTopicMap] = useState<Map<string, string>>(new Map());
-    const containerRef = useRef<HTMLDivElement>(null);
+    const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
     const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
     // 1. Tree State & Operations
@@ -133,6 +133,7 @@ function MindMapFlowInner({
 
     // 4. Keyboard Shortcuts
     useKeyboardShortcuts({
+        containerElement,
         selectedNodeIds,
         copyNode,
         cutNode,
@@ -325,7 +326,7 @@ function MindMapFlowInner({
     return (
         <div
             style={{ width: '100%', height: '100%' }}
-            ref={containerRef}
+            ref={setContainerElement}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
         >
