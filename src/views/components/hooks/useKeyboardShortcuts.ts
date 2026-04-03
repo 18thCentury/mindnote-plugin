@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 export interface UseKeyboardShortcutsProps {
+    containerElement: HTMLElement | null;
     selectedNodeIds: Set<string>;
     copyNode: () => void;
     cutNode: () => void;
@@ -49,6 +50,7 @@ function isTypingContext(target: EventTarget | null): boolean {
 }
 
 export function useKeyboardShortcuts({
+    containerElement,
     selectedNodeIds,
     copyNode,
     cutNode,
@@ -62,7 +64,29 @@ export function useKeyboardShortcuts({
     redo,
 }: UseKeyboardShortcutsProps) {
     useEffect(() => {
+        let isActiveMap = false;
+
+        const updateActiveMapFromTarget = (target: EventTarget | null) => {
+            if (!containerElement) {
+                isActiveMap = false;
+                return;
+            }
+            isActiveMap = target instanceof Node && containerElement.contains(target);
+        };
+
+        const handlePointerDown = (e: PointerEvent) => {
+            updateActiveMapFromTarget(e.target);
+        };
+
+        const handleFocusIn = (e: FocusEvent) => {
+            updateActiveMapFromTarget(e.target);
+        };
+
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (!isActiveMap) {
+                return;
+            }
+
             if (isTypingContext(e.target)) {
                 return;
             }
@@ -139,9 +163,16 @@ export function useKeyboardShortcuts({
             }
         };
 
+        document.addEventListener('pointerdown', handlePointerDown, true);
+        document.addEventListener('focusin', handleFocusIn, true);
         window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown, true);
+            document.removeEventListener('focusin', handleFocusIn, true);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
     }, [
+        containerElement,
         selectedNodeIds,
         copyNode,
         cutNode,
