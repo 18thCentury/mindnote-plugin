@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { NodeMouseHandler, OnNodeDrag } from '@xyflow/react';
-import { findParentNode } from '../treeOperations';
+import { findNodeInTree, findParentNode } from '../treeOperations';
 import {
     moveNodeAsChild,
     moveNodeAsSiblingAbove,
@@ -14,6 +14,7 @@ export interface UseNodeDragProps {
     setSelectedNodeIds: React.Dispatch<React.SetStateAction<Set<string>>>;
     setTreeData: React.Dispatch<React.SetStateAction<MindNode>>;
     onMapDataChange?: (data: MindMapData) => void;
+    onNodeMove?: (node: MindNode, oldParentId: string, newParentId: string) => void;
 }
 
 export function useNodeDrag({
@@ -22,6 +23,7 @@ export function useNodeDrag({
     setSelectedNodeIds,
     setTreeData,
     onMapDataChange,
+    onNodeMove,
 }: UseNodeDragProps) {
     const [dragState, setDragState] = useState<{
         draggedNodeId: string | null;
@@ -154,6 +156,20 @@ export function useNodeDrag({
         }
 
         if (changed) {
+            for (const nodeId of independentNodesToMove) {
+                const oldParentId = findParentNode(currentTree, nodeId)?.id;
+                const newParentId = findParentNode(newTree, nodeId)?.id;
+
+                if (!oldParentId || !newParentId || oldParentId === newParentId) {
+                    continue;
+                }
+
+                const movedNode = findNodeInTree(newTree, nodeId);
+                if (movedNode) {
+                    onNodeMove?.(movedNode, oldParentId, newParentId);
+                }
+            }
+
             setTreeData(newTree);
             onMapDataChange?.({ nodeData: newTree });
         } else {
@@ -166,7 +182,7 @@ export function useNodeDrag({
             dropZone: null,
             isExternalFileDrag: false,
         });
-    }, [dragState, onMapDataChange, selectedNodeIds, treeDataRef, setTreeData]);
+    }, [dragState, onMapDataChange, onNodeMove, selectedNodeIds, treeDataRef, setTreeData]);
 
     return {
         dragState,

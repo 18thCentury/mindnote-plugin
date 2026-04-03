@@ -316,6 +316,63 @@ describe('StateSynchronizer', () => {
             expect(node.filepath).toBe('Renamed Root.md');
             expect(node.children[0].filepath).toBe('Renamed Root/C1.md');
         });
+
+        it('should move markdown file to target parent directory', async () => {
+            const mapData = {
+                nodeData: {
+                    id: 'root',
+                    topic: 'Root',
+                    filepath: 'Root.md',
+                    children: [
+                        { id: 'parentA', topic: 'Parent A', filepath: 'Root/Parent A.md', children: [], expanded: true },
+                        { id: 'parentB', topic: 'Parent B', filepath: 'Root/Parent B.md', children: [], expanded: true },
+                        { id: 'child', topic: 'Child', filepath: 'Root/Parent A/Child.md', children: [], expanded: true },
+                    ],
+                    expanded: true,
+                },
+            };
+
+            mockApp.vault.read.mockResolvedValue(JSON.stringify(mapData));
+
+            const childFile = new TFile();
+            childFile.path = 'test.mn/md/Root/Parent A/Child.md';
+            childFile.name = 'Child.md';
+
+            const targetFolder = new TFolder();
+            targetFolder.path = 'test.mn/md/Root/Parent B';
+            targetFolder.name = 'Parent B';
+
+            mockApp.vault.getAbstractFileByPath.mockImplementation((path: string) => {
+                if (path.includes('map.mn')) {
+                    const f = new TFile(); f.path = path; f.name = 'map.mn'; return f;
+                }
+                if (path === 'test.mn/md/Root/Parent A/Child.md') return childFile;
+                if (path === 'test.mn/md/Root/Parent B') return targetFolder;
+                if (path === 'test.mn/md/Root') {
+                    const folder = new TFolder();
+                    folder.path = path;
+                    folder.name = 'Root';
+                    return folder;
+                }
+                return null;
+            });
+
+            await sync.initialize('test.mn');
+
+            const movedNode: MindNode = {
+                id: 'child',
+                topic: 'Child',
+                filepath: 'Root/Parent A/Child.md',
+                children: [],
+                expanded: true,
+            };
+
+            await (sync as any).executeNodeMove(movedNode, 'parentB');
+
+            expect(mockFsm.ensureDirectory).toHaveBeenCalledWith('test.mn/md/Root/Parent B');
+            expect(mockFsm.renameFile).toHaveBeenCalledWith(childFile, 'test.mn/md/Root/Parent B/Child.md');
+            expect(movedNode.filepath).toBe('Root/Parent B/Child.md');
+        });
     });
 
     describe('getMapData', () => {

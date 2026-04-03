@@ -50,6 +50,7 @@ export interface MindMapFlowProps {
     onNodeCreate?: (node: MindNode, parentId: string, fileType?: 'markdown' | 'canvas') => void;
     onNodeDelete?: (node: MindNode) => void;
     onNodeRename?: (node: MindNode, oldTopic: string) => void;
+    onNodeMove?: (node: MindNode, oldParentId: string, newParentId: string) => void;
     onMapDataChange?: (data: MindMapData) => void;
     onDrop?: (files: FileList, targetNodeId: string | null) => void;
     onPaste?: (files: File[], targetNodeId: string | null) => void;
@@ -66,6 +67,7 @@ function MindMapFlowInner({
     onNodeCreate,
     onNodeDelete,
     onNodeRename,
+    onNodeMove,
     onMapDataChange,
     onDrop,
     onPaste,
@@ -114,6 +116,7 @@ function MindMapFlowInner({
         setSelectedNodeIds,
         setTreeData,
         onMapDataChange,
+        onNodeMove,
     });
 
     // 3. Clipboard
