@@ -2,6 +2,7 @@
  * FileSystemManager Unit Tests
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { TFolder } from 'obsidian';
 import { FileSystemManager } from '../../src/core/FileSystemManager';
 
 // Mock App
@@ -156,6 +157,35 @@ describe('FileSystemManager', () => {
             await fsm.deleteFile(mockFile as any);
 
             expect(mockApp.fileManager.trashFile).toHaveBeenCalledWith(mockFile);
+        });
+    });
+
+
+    describe('saveImage and saveResource', () => {
+        it('should save image under img folder and return relative path', async () => {
+            const imgFolder = new TFolder();
+            imgFolder.path = 'bundle.mn/img';
+            mockApp.vault.getAbstractFileByPath.mockImplementation((path: string) => path === 'bundle.mn/img' ? imgFolder : null);
+
+            const data = new ArrayBuffer(8);
+            const result = await fsm.saveImage('bundle.mn', data, 'photo.png');
+
+            expect(mockApp.vault.createFolder).not.toHaveBeenCalled();
+            expect(mockApp.vault.createBinary).toHaveBeenCalledWith('bundle.mn/img/photo.png', data);
+            expect(result).toBe('img/photo.png');
+        });
+
+        it('should save generic resource under file folder and return relative path', async () => {
+            const fileFolder = new TFolder();
+            fileFolder.path = 'bundle.mn/file';
+            mockApp.vault.getAbstractFileByPath.mockImplementation((path: string) => path === 'bundle.mn/file' ? fileFolder : null);
+
+            const data = new ArrayBuffer(8);
+            const result = await fsm.saveResource('bundle.mn', data, 'doc.pdf');
+
+            expect(mockApp.vault.createFolder).not.toHaveBeenCalled();
+            expect(mockApp.vault.createBinary).toHaveBeenCalledWith('bundle.mn/file/doc.pdf', data);
+            expect(result).toBe('file/doc.pdf');
         });
     });
 
